@@ -57,6 +57,9 @@ pub struct Engine {
     global_colors: BTreeMap<Scope, String>,
     /// UDL key → display name.
     udl_display: BTreeMap<String, String>,
+    /// Optional editor canvas colors from the active theme (`RRGGBB`).
+    editor_fg: Option<String>,
+    editor_bg: Option<String>,
 }
 
 impl Engine {
@@ -72,6 +75,8 @@ impl Engine {
             style_colors: BTreeMap::new(),
             global_colors: BTreeMap::new(),
             udl_display: BTreeMap::new(),
+            editor_fg: None,
+            editor_bg: None,
         };
         eng.load_langs(langs_model);
         eng.load_stylers(langs_model);
@@ -204,21 +209,41 @@ impl Engine {
 
     fn load_stylers(&mut self, langs_model: Option<&Path>) {
         for p in Self::model_candidates(langs_model, "stylers.model.xml") {
-            if let Ok(styles) = npp_config::parse_stylers_model(&p) {
-                for (lexer, rows) in styles {
-                    let mut map = BTreeMap::new();
-                    for row in rows {
-                        if let Some(scope) = scope_from_style_name(&row.name) {
-                            let rgb = bgr_to_rgb(&row.fg);
-                            map.entry(scope).or_insert(rgb.clone());
-                            self.global_colors.entry(scope).or_insert(rgb);
-                        }
-                    }
-                    self.style_colors.insert(lexer, map);
-                }
+            if self.apply_stylers_file(&p) {
                 break;
             }
         }
+    }
+
+    /// Replace styler colors from a theme / `stylers.model.xml` path.
+    fn apply_stylers_file(&mut self, path: &Path) -> bool {
+        let Ok(styles) = npp_config::parse_stylers_model(path) else {
+            return false;
+        };
+        self.style_colors.clear();
+        self.global_colors.clear();
+        self.editor_fg = None;
+        self.editor_bg = None;
+        for (lexer, rows) in styles {
+            let mut map = BTreeMap::new();
+            for row in rows {
+                if row.name.eq_ignore_ascii_case("DEFAULT") {
+                    if self.editor_fg.is_none() && !row.fg.is_empty() {
+                        self.editor_fg = Some(bgr_to_rgb(&row.fg));
+                    }
+                    if self.editor_bg.is_none() && !row.bg.is_empty() {
+                        self.editor_bg = Some(bgr_to_rgb(&row.bg));
+                    }
+                }
+                if let Some(scope) = scope_from_style_name(&row.name) {
+                    let rgb = bgr_to_rgb(&row.fg);
+                    map.entry(scope).or_insert(rgb.clone());
+                    self.global_colors.entry(scope).or_insert(rgb);
+                }
+            }
+            self.style_colors.insert(lexer, map);
+        }
+        true
     }
 
     fn resolve_lang(&self, lang: &str) -> String {
@@ -942,6 +967,50 @@ pub unsafe extern "C" fn npp_scope_fg(
         _ => Scope::Default,
     };
     to_cstring(&eng.color_for(lang, sc))
+}
+
+/// Load a theme / stylers XML, replacing current colors. Returns false on error.
+#[no_mangle]
+pub unsafe extern "C" fn npp_stylers_load(
+    engine: *mut Engine,
+    path: *const c_char,
+    err_out: *mut *mut c_char,
+) -> bool {
+    if !err_out.is_null() {
+        *err_out = ptr::null_mut();
+    }
+    let Some(eng) = eng_mut(engine) else {
+        return false;
+    };
+    let Some(path) = cstr_to_str(path) else {
+        return false;
+    };
+    if eng.apply_stylers_file(Path::new(path)) {
+        true
+    } else {
+        if !err_out.is_null() {
+            *err_out = to_cstring("failed to parse stylers/theme XML");
+        }
+        false
+    }
+}
+
+/// Theme editor foreground (`RRGGBB`) or empty.
+#[no_mangle]
+pub unsafe extern "C" fn npp_editor_fg(engine: *const Engine) -> *mut c_char {
+    let Some(eng) = eng_ref(engine) else {
+        return to_cstring("");
+    };
+    to_cstring(eng.editor_fg.as_deref().unwrap_or(""))
+}
+
+/// Theme editor background (`RRGGBB`) or empty.
+#[no_mangle]
+pub unsafe extern "C" fn npp_editor_bg(engine: *const Engine) -> *mut c_char {
+    let Some(eng) = eng_ref(engine) else {
+        return to_cstring("");
+    };
+    to_cstring(eng.editor_bg.as_deref().unwrap_or(""))
 }
 
 /// Guess language from path; uses engine extension map when `engine` is non-null.

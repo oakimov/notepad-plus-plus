@@ -56,6 +56,28 @@ enum MenuBuilder {
 
         let settings = NSMenu(title: "Settings")
         item(settings, "Preferences…", #selector(MainWindowController.openPreferences(_:)), ",")
+        item(settings, "Style Configurator…", #selector(MainWindowController.openStyleConfigurator(_:)), "")
+        settings.addItem(.separator())
+        let theme = NSMenu(title: "Theme")
+        item(theme, "Default (stylers.model)", #selector(MainWindowController.themeSelect(_:)), "")
+        if let none = theme.items.last { none.representedObject = "" }
+        for name in Self.bundledThemeNames() {
+            let i = theme.addItem(withTitle: name, action: #selector(MainWindowController.themeSelect(_:)), keyEquivalent: "")
+            i.representedObject = name + ".xml"
+            i.target = nil
+        }
+        let themeParent = settings.addItem(withTitle: "Theme", action: nil, keyEquivalent: "")
+        settings.setSubmenu(theme, for: themeParent)
+        settings.addItem(.separator())
+        let appear = NSMenu(title: "Appearance")
+        item(appear, "System", #selector(MainWindowController.appearanceSelect(_:)), "")
+        if let i = appear.items.last { i.representedObject = "system" }
+        item(appear, "Light", #selector(MainWindowController.appearanceSelect(_:)), "")
+        if let i = appear.items.last { i.representedObject = "light" }
+        item(appear, "Dark", #selector(MainWindowController.appearanceSelect(_:)), "")
+        if let i = appear.items.last { i.representedObject = "dark" }
+        let appearParent = settings.addItem(withTitle: "Appearance", action: nil, keyEquivalent: "")
+        settings.setSubmenu(appear, for: appearParent)
         attach(mainMenu, title: "Settings", menu: settings)
 
         let tools = NSMenu(title: "Tools")
@@ -105,6 +127,28 @@ enum MenuBuilder {
     private static func item(_ menu: NSMenu, _ title: String, _ action: Selector?, _ key: String) {
         let i = menu.addItem(withTitle: title, action: action, keyEquivalent: key)
         i.target = nil
+    }
+
+    /// Theme basenames bundled under Resources/themes (without `.xml`).
+    static func bundledThemeNames() -> [String] {
+        var names: [String] = []
+        if let urls = Bundle.main.urls(forResourcesWithExtension: "xml", subdirectory: "themes") {
+            names = urls.map { $0.deletingPathExtension().lastPathComponent }
+        }
+        // Dev fallback: PowerEditor installer themes next to the repo.
+        if names.isEmpty {
+            let dev = URL(fileURLWithPath: #file)
+                .deletingLastPathComponent() // App
+                .deletingLastPathComponent() // NppMac
+                .deletingLastPathComponent() // Sources
+                .deletingLastPathComponent() // NppMac
+                .deletingLastPathComponent() // npp-macos
+                .appendingPathComponent("PowerEditor/installer/themes")
+            if let urls = try? FileManager.default.contentsOfDirectory(at: dev, includingPropertiesForKeys: nil) {
+                names = urls.filter { $0.pathExtension == "xml" }.map { $0.deletingPathExtension().lastPathComponent }
+            }
+        }
+        return names.sorted()
     }
 
     /// Point every built item whose action the window controller implements at it.
@@ -278,6 +322,7 @@ enum MenuBuilder {
     private static func addView(_ m: NSMenu) {
         item(m, "Word Wrap", #selector(MainWindowController.viewToggleWrap(_:)), "")
         item(m, "Show Line Numbers", #selector(MainWindowController.viewToggleLineNumbers(_:)), "")
+        item(m, "Show Whitespace", #selector(MainWindowController.viewToggleWhitespace(_:)), "")
         m.addItem(.separator())
         item(m, "Folder as Workspace", #selector(MainWindowController.viewToggleFolder(_:)), "")
         item(m, "Function List", #selector(MainWindowController.viewToggleFunctionList(_:)), "")

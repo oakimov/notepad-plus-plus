@@ -28,6 +28,9 @@ enum SessionStore {
                 <TabWidth>\(AppPrefs.tabWidth)</TabWidth>
                 <FifFilters>\(xmlEscape(AppPrefs.fifFilters))</FifFilters>
                 <FifExcludes>\(xmlEscape(AppPrefs.fifExcludes))</FifExcludes>
+                <Appearance>\(xmlEscape(AppPrefs.appearance))</Appearance>
+                <ShowWhitespace>\(AppPrefs.showWhitespace ? 1 : 0)</ShowWhitespace>
+                <Theme>\(xmlEscape(AppPrefs.themeName))</Theme>
             </GUIConfig>
         </NotepadPlus>
         """
@@ -45,6 +48,9 @@ enum SessionStore {
         if let v = intTag("TabWidth", in: text), v > 0, v < 32 { AppPrefs.tabWidth = v }
         if let s = stringTag("FifFilters", in: text) { AppPrefs.fifFilters = xmlUnescape(s) }
         if let s = stringTag("FifExcludes", in: text) { AppPrefs.fifExcludes = xmlUnescape(s) }
+        if let s = stringTag("Appearance", in: text) { AppPrefs.appearance = s }
+        if let v = intTag("ShowWhitespace", in: text) { AppPrefs.showWhitespace = v != 0 }
+        if let s = stringTag("Theme", in: text) { AppPrefs.themeName = xmlUnescape(s) }
     }
 
     private static func intTag(_ name: String, in text: String) -> Int? {

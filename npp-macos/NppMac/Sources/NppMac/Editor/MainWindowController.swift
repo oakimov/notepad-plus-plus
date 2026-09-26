@@ -29,7 +29,9 @@ final class MainWindowController: NSWindowController {
     private var lineNumberRuler: LineNumberRulerView?
     private var wordWrapEnabled = false
     private var lineNumbersVisible = true
+    private var showWhitespace = false
     private var editorFontSize: CGFloat = 13
+    private weak var invisibleLayout: InvisibleCharsLayoutManager?
     /// Bookmarked line indices (0-based) per document index.
     private var bookmarksByDoc: [Int: Set<Int>] = [:]
     /// Editor bottom → find panel top (find visible) or → status bar top (hidden).
@@ -53,6 +55,7 @@ final class MainWindowController: NSWindowController {
     init(documents store: DocumentStore) {
         self.store = store
         textView = Self.makeTextView()
+        invisibleLayout = textView.layoutManager as? InvisibleCharsLayoutManager
         statusLabel = NSTextField(labelWithString: "")
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
@@ -76,7 +79,14 @@ final class MainWindowController: NSWindowController {
             name: .nppPrefsDidChange,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(stylesDidChange(_:)),
+            name: .nppStylesDidChange,
+            object: nil
+        )
         startDiskWatchIfNeeded()
+        applyThemeFromPrefs()
         refresh()
     }
 
@@ -91,15 +101,21 @@ final class MainWindowController: NSWindowController {
     }
 
     private static func makeTextView() -> NSTextView {
-        let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: 1000, height: 600))
+        let storage = NSTextStorage()
+        let layout = InvisibleCharsLayoutManager()
+        storage.addLayoutManager(layout)
+        let container = NSTextContainer(containerSize: NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        ))
+        container.widthTracksTextView = false
+        layout.addTextContainer(container)
+        let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: 1000, height: 600), textContainer: container)
         tv.minSize = NSSize(width: 0, height: 0)
         tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        // No word wrap (Notepad++ default): container never tracks the view width.
         tv.isVerticallyResizable = true
         tv.isHorizontallyResizable = true
         tv.autoresizingMask = [.width]
-        tv.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        tv.textContainer?.widthTracksTextView = false
         tv.font = NSFont.monospacedSystemFont(ofSize: defaultFontSize, weight: .regular)
         tv.typingAttributes = [
             .font: NSFont.monospacedSystemFont(ofSize: defaultFontSize, weight: .regular),
@@ -1384,8 +1400,94 @@ final class MainWindowController: NSWindowController {
         applyWrapMode()
         lineNumbersVisible = AppPrefs.showLineNumbers
         editorScroll?.rulersVisible = lineNumbersVisible
+        showWhitespace = AppPrefs.showWhitespace
+        invisibleLayout?.showInvisibles = showWhitespace
+        textView.needsDisplay = true
         applyTabWidth(AppPrefs.tabWidth)
+        AppPrefs.applyAppearance()
         startDiskWatchIfNeeded()
+    }
+
+    @objc private func stylesDidChange(_ note: Notification) {
+        scheduleHighlight()
+    }
+
+    func applyThemeFromPrefs() {
+        let name = AppPrefs.themeName
+        if name.isEmpty {
+            if let stock = Bundle.main.url(forResource: "stylers.model", withExtension: "xml") {
+                _ = try? store.loadStylers(path: stock.path)
+            }
+        } else if let url = Self.themeURL(named: name) {
+            _ = try? store.loadStylers(path: url.path)
+        }
+        applyEditorThemeColors()
+        scheduleHighlight()
+    }
+
+    private static func themeURL(named file: String) -> URL? {
+        let base = (file as NSString).deletingPathExtension
+        if let u = Bundle.main.url(forResource: base, withExtension: "xml", subdirectory: "themes") {
+            return u
+        }
+        if let u = Bundle.main.url(forResource: base, withExtension: "xml") {
+            return u
+        }
+        let dev = URL(fileURLWithPath: #file)
+            .deletingLastPathComponent() // Editor
+            .deletingLastPathComponent() // NppMac
+            .deletingLastPathComponent() // Sources
+            .deletingLastPathComponent() // NppMac
+            .deletingLastPathComponent() // npp-macos
+            .appendingPathComponent("PowerEditor/installer/themes")
+            .appendingPathComponent(file.hasSuffix(".xml") ? file : file + ".xml")
+        return FileManager.default.fileExists(atPath: dev.path) ? dev : nil
+    }
+
+    private func applyEditorThemeColors() {
+        let (fg, bg) = store.editorThemeColors()
+        if let bg {
+            textView.backgroundColor = bg
+            editorScroll?.backgroundColor = bg
+        } else {
+            textView.backgroundColor = .textBackgroundColor
+        }
+        if let fg {
+            textView.textColor = fg
+            var typing = textView.typingAttributes
+            typing[.foregroundColor] = fg
+            textView.typingAttributes = typing
+        }
+    }
+
+    @objc func viewToggleWhitespace(_ sender: Any?) {
+        showWhitespace.toggle()
+        AppPrefs.showWhitespace = showWhitespace
+        invisibleLayout?.showInvisibles = showWhitespace
+        textView.needsDisplay = true
+        SessionStore.saveConfig()
+    }
+
+    @objc func openStyleConfigurator(_ sender: Any?) {
+        StyleConfiguratorWindow.show()
+    }
+
+    @objc func themeSelect(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem else { return }
+        let name = (item.representedObject as? String) ?? ""
+        AppPrefs.themeName = name
+        applyThemeFromPrefs()
+        SessionStore.saveConfig()
+        statusLabel.stringValue = name.isEmpty ? "Theme: Default" : "Theme: \(name)"
+    }
+
+    @objc func appearanceSelect(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem,
+              let mode = item.representedObject as? String
+        else { return }
+        AppPrefs.appearance = mode
+        AppPrefs.applyAppearance()
+        SessionStore.saveConfig()
     }
 
     private func applyTabWidth(_ n: Int) {
@@ -1717,6 +1819,14 @@ extension MainWindowController: NSMenuItemValidation {
             menuItem.state = wordWrapEnabled ? .on : .off
         } else if menuItem.action == #selector(viewToggleLineNumbers(_:)) {
             menuItem.state = lineNumbersVisible ? .on : .off
+        } else if menuItem.action == #selector(viewToggleWhitespace(_:)) {
+            menuItem.state = showWhitespace ? .on : .off
+        } else if menuItem.action == #selector(themeSelect(_:)) {
+            let name = (menuItem.representedObject as? String) ?? ""
+            menuItem.state = AppPrefs.themeName == name ? .on : .off
+        } else if menuItem.action == #selector(appearanceSelect(_:)) {
+            let mode = (menuItem.representedObject as? String) ?? "system"
+            menuItem.state = AppPrefs.appearance == mode ? .on : .off
         } else if menuItem.action == #selector(viewToggleFolder(_:)) {
             menuItem.state = folderVisible ? .on : .off
         } else if menuItem.action == #selector(viewToggleFunctionList(_:)) {

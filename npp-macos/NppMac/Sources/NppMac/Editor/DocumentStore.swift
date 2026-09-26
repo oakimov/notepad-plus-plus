@@ -151,7 +151,21 @@ final class DocumentStore {
     }
 
     func color(forScope scope: Int32, language: String) -> NSColor {
-        engine.color(forScope: scope, language: language)
+        if let hex = AppPrefs.styleOverride(scope: scope),
+           let c = StyleColors.color(fromRGBHex: hex)
+        {
+            return c
+        }
+        return engine.color(forScope: scope, language: language)
+    }
+
+    @discardableResult
+    func loadStylers(path: String) throws -> Bool {
+        try engine.loadStylers(path: path)
+    }
+
+    func editorThemeColors() -> (fg: NSColor?, bg: NSColor?) {
+        engine.editorThemeColors()
     }
 
     func findAll(in text: String, pattern: String, caseSensitive: Bool, wholeWord: Bool, regex: Bool) throws -> [NppEngine.Match] {

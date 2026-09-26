@@ -193,6 +193,22 @@ final class NppEngine {
         return Self.color(fromRGBHex: hex) ?? Self.fallbackColor(forScope: scope)
     }
 
+    @discardableResult
+    func loadStylers(path: String) throws -> Bool {
+        var err: UnsafeMutablePointer<CChar>?
+        let ok = path.withCString { npp_stylers_load(ptr, $0, &err) }
+        if let err {
+            throw NSError(domain: "NppEngine", code: 4, userInfo: [NSLocalizedDescriptionKey: Self.takeString(err)])
+        }
+        return ok
+    }
+
+    func editorThemeColors() -> (fg: NSColor?, bg: NSColor?) {
+        let fg = Self.color(fromRGBHex: Self.takeString(npp_editor_fg(ptr)))
+        let bg = Self.color(fromRGBHex: Self.takeString(npp_editor_bg(ptr)))
+        return (fg, bg)
+    }
+
     struct Match {
         var range: NSRange
     }

@@ -112,6 +112,12 @@ char *npp_language_for_path_ex(const NppEngine *engine, const char *path);
 /// RGB hex (`RRGGBB`) foreground for scope under lang (from stylers.model.xml).
 char *npp_scope_fg(const NppEngine *engine, const char *lang, uint32_t scope);
 
+/// Load theme / stylers XML (replaces colors). Optional err_out.
+bool npp_stylers_load(NppEngine *engine, const char *path, char **err_out);
+/// Theme DEFAULT fg/bg (`RRGGBB`); empty string if unset.
+char *npp_editor_fg(const NppEngine *engine);
+char *npp_editor_bg(const NppEngine *engine);
+
 /// Highlight `text` for `lang`. Allocates *out_tokens; free with npp_tokens_free.
 /// Returns token count (0 on empty / failure).
 int32_t npp_highlight(NppEngine *engine, const char *lang, const char *text,

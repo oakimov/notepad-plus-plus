@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         SessionStore.loadConfig()
+        AppPrefs.applyAppearance()
         applyAppIcon()
         MenuBuilder.build()
         let controller = MainWindowController(documents: DocumentStore(engine: NppEngine(langsModel: Self.langsModelPath())))

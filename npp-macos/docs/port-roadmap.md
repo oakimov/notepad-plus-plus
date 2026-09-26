@@ -16,6 +16,7 @@ Phased Notepad++ macOS parity on NSTextView + Rust FFI.
 - Bookmarks (toggle / next / prev / clear)
 - Encoding UTF-16 LE/BE + EOL Conversion (CRLF/LF/CR)
 - Status bar: Ln/Col + EOL + language display name
+- Show Whitespace
 
 ## Done — Phase 3: Edit extras + Rust search + FiF filters
 
@@ -24,12 +25,15 @@ Phased Notepad++ macOS parity on NSTextView + Rust FFI.
 - Fancy-regex + literal/whole-word find through Rust
 - Find-in-Files: include globs, directory excludes, case/word/regex options
 
-## Done — Phase 4 (partial): Session + prefs + disk watch
+## Done — Phase 4: Session + prefs + config + styles
 
 - `session.xml` restore on launch / save on quit (gated by preference)
 - File → Open Recent (+ Clear Menu)
 - Preferences: wrap, line numbers, backup, session, disk watch, tab width
 - `.bak` backup before save; auto-reload clean tabs on disk change
+- `config.xml` load/save (incl. theme, appearance, whitespace)
+- Style Configurator (scope color overrides)
+- Settings → Theme (bundled NPP themes) + Appearance (system/light/dark)
 
 ## Done — Phase 5 (partial): File extras + panels
 
@@ -49,18 +53,8 @@ Phased Notepad++ macOS parity on NSTextView + Rust FFI.
 
 - File → Print…
 - Language → Load UDL… (keyword highlighting from `.udl.xml`)
-- `parse_udl` / `npp_udl_load` FFI
-- View → Document Map (minimap jump)
-- View → Clipboard History (floating panel)
+- View → Document Map, Clipboard History
 - Edit → Character Panel…, Insert Date/Time
-
-## Done — Phase 4 (partial): config.xml
-
-- `~/Library/Application Support/NppMac/config.xml` load on launch / save on prefs+quit
-
-## Phase 4 — remaining
-
-Deeper stylers Preferences / Style Configurator.
 
 ## Phase 6 — remaining
 
@@ -68,5 +62,4 @@ Full Notepad++ plugin ABI / dylib load + invoke.
 
 ## Phase 7 — remaining
 
-Style Configurator, multi-caret/column (best-effort),
-nativeLang, Dark Mode themes.
+Multi-caret/column (best-effort), nativeLang.

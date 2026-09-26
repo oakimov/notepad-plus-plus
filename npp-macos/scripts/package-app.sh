@@ -67,5 +67,16 @@ if [[ -f "$STYLERS" ]]; then
   cp "$STYLERS" "$APP/Contents/Resources/stylers.model.xml"
 fi
 
+# Bundle a curated set of Notepad++ themes for Settings → Theme.
+THEMES_SRC="$ROOT/../PowerEditor/installer/themes"
+THEMES_DST="$APP/Contents/Resources/themes"
+mkdir -p "$THEMES_DST"
+for t in Monokai.xml Zenburn.xml Solarized.xml Solarized-light.xml Twilight.xml \
+         "Deep Black.xml" Obsidian.xml Bespin.xml "DarkModeDefault.xml" khaki.xml; do
+  if [[ -f "$THEMES_SRC/$t" ]]; then
+    cp "$THEMES_SRC/$t" "$THEMES_DST/"
+  fi
+done
+
 echo "==> built $APP"
 echo "    open $APP"
