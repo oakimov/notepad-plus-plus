@@ -16,6 +16,8 @@ final class MainWindowController: NSWindowController {
     private var functionListVisible = false
     private var diskWatchTimer: Timer?
     private var knownMtimes: [String: Date] = [:]
+    private var macroRecording = false
+    private var macroSteps: [String] = []
     private weak var editorScroll: NSScrollView?
     private var lineNumberRuler: LineNumberRulerView?
     private var wordWrapEnabled = false
@@ -880,13 +882,46 @@ final class MainWindowController: NSWindowController {
             NSSound.beep()
             return
         }
+
+        let alert = NSAlert()
+        alert.messageText = "Find in Files"
+        alert.informativeText = "Filters (e.g. *.swift;*.rs) and folders to exclude:"
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.spacing = 6
+        stack.frame = NSRect(x: 0, y: 0, width: 360, height: 56)
+        let filtersField = NSTextField(string: AppPrefs.fifFilters)
+        filtersField.placeholderString = "Filters"
+        let excludesField = NSTextField(string: AppPrefs.fifExcludes)
+        excludesField.placeholderString = "Excludes"
+        stack.addArrangedSubview(filtersField)
+        stack.addArrangedSubview(excludesField)
+        alert.accessoryView = stack
+        alert.addButton(withTitle: "Choose Folder…")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        AppPrefs.fifFilters = filtersField.stringValue
+        AppPrefs.fifExcludes = excludesField.stringValue
+
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.prompt = "Find"
+        if let dir = store.selectedMeta()?.fileURL?.deletingLastPathComponent() {
+            panel.directoryURL = dir
+        }
+        let opts = findPanel.options
+        let filters = AppPrefs.fifFilters
+        let excludes = AppPrefs.fifExcludes
         panel.beginSheetModal(for: window) { [weak self] result in
             guard let self, result == .OK, let dir = panel.url else { return }
-            self.findPanel?.findInFiles(directory: dir) { [weak self] hits in
+            self.statusLabel.stringValue = "Searching…"
+            self.findPanel?.findInFiles(
+                directory: dir,
+                filters: filters,
+                excludes: excludes,
+                options: opts
+            ) { [weak self] hits in
                 self?.presentFindResults(hits)
             }
         }
@@ -1013,8 +1048,12 @@ final class MainWindowController: NSWindowController {
         for h in hits.prefix(500) {
             text += "\(h.file.path)(\(h.line)): \(h.preview)\n"
         }
+        if hits.count > 500 {
+            text += "… truncated (showing 500 of \(hits.count))\n"
+        }
         store.openDocument(title: "Find result", url: nil, text: text, language: "normal")
         refresh()
+        statusLabel.stringValue = "Find in Files: \(hits.count) hit(s)"
     }
 
     // MARK: - View / Encoding / Language / Help
@@ -1405,14 +1444,96 @@ final class MainWindowController: NSWindowController {
     @objc func openPreferences(_ sender: Any?) {
         PreferencesWindow.show()
     }
+
+    // MARK: - Macro (shell)
+
+    @objc func macroStartRecording(_ sender: Any?) {
+        macroRecording = true
+        macroSteps = []
+        statusLabel.stringValue = "Macro recording…"
+    }
+
+    @objc func macroStopRecording(_ sender: Any?) {
+        guard macroRecording else { NSSound.beep(); return }
+        macroRecording = false
+        statusLabel.stringValue = "Macro stopped (\(macroSteps.count) steps)"
+    }
+
+    @objc func macroPlayback(_ sender: Any?) {
+        guard !macroSteps.isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "No macro recorded"
+            alert.informativeText = "Use Macro → Start Recording, perform edits, then Stop Recording."
+            alert.runModal()
+            return
+        }
+        // Playback is limited to recorded text-insert steps for now.
+        for step in macroSteps {
+            if step.hasPrefix("insert:") {
+                let text = String(step.dropFirst("insert:".count))
+                let range = textView.selectedRange()
+                replaceEditorText(in: range, with: text)
+            }
+        }
+        statusLabel.stringValue = "Macro playback finished"
+    }
+
+    @objc func macroSave(_ sender: Any?) {
+        guard !macroSteps.isEmpty else { NSSound.beep(); return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "macro.txt"
+        panel.begin { [weak self] result in
+            guard let self, result == .OK, let url = panel.url else { return }
+            let body = self.macroSteps.joined(separator: "\n") + "\n"
+            try? body.write(to: url, atomically: true, encoding: .utf8)
+            self.statusLabel.stringValue = "Macro saved"
+        }
+    }
+
+    /// Record a typing step while macro recording is active.
+    func recordMacroInsert(_ text: String) {
+        guard macroRecording, !text.isEmpty else { return }
+        macroSteps.append("insert:\(text)")
+    }
+
+    // MARK: - Plugins (shell)
+
+    @objc func pluginsOpenFolder(_ sender: Any?) {
+        NSWorkspace.shared.open(PluginHost.pluginsDirectory)
+    }
+
+    @objc func pluginsRefresh(_ sender: Any?) {
+        MenuBuilder.reloadPlugins(target: self)
+        statusLabel.stringValue = "Plugins: \(PluginHost.discover().count) found"
+    }
+
+    @objc func pluginsInvoke(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem, let url = item.representedObject as? URL else { return }
+        let alert = NSAlert()
+        alert.messageText = "Plugin host (stub)"
+        alert.informativeText = "Discovered \(url.lastPathComponent).\nFull Notepad++ plugin ABI loading is not yet implemented on macOS."
+        alert.runModal()
+    }
 }
 
 extension MainWindowController: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
         guard !syncingText else { return }
         editorNeedsSync = true
+        if macroRecording {
+            // Best-effort: record the last typed character(s) via change count is hard;
+            // capture short inserts when selection was empty before sync.
+            // Full keystroke capture lands with a dedicated textStorage observer later.
+        }
         scheduleSync()
         scheduleHighlight()
+    }
+
+    func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        if macroRecording, let replacementString, !replacementString.isEmpty {
+            recordMacroInsert(replacementString)
+        }
+        return true
     }
 
     /// Each tab keeps its own undo history (the editor view is shared).
@@ -1441,6 +1562,12 @@ extension MainWindowController: NSMenuItemValidation {
             menuItem.state = folderVisible ? .on : .off
         } else if menuItem.action == #selector(viewToggleFunctionList(_:)) {
             menuItem.state = functionListVisible ? .on : .off
+        } else if menuItem.action == #selector(macroStartRecording(_:)) {
+            return !macroRecording
+        } else if menuItem.action == #selector(macroStopRecording(_:)) {
+            return macroRecording
+        } else if menuItem.action == #selector(macroPlayback(_:)) || menuItem.action == #selector(macroSave(_:)) {
+            return !macroSteps.isEmpty && !macroRecording
         }
         let enc = store.selectedIndex >= 0 ? store.encoding(at: store.selectedIndex) : nil
         if menuItem.action == #selector(encUtf8(_:)) {

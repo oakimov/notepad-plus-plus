@@ -65,6 +65,19 @@ enum MenuBuilder {
         item(tools, "SHA-256 of Selection…", #selector(MainWindowController.toolsSHA256Selection(_:)), "")
         attach(mainMenu, title: "Tools", menu: tools)
 
+        let macro = NSMenu(title: "Macro")
+        item(macro, "Start Recording", #selector(MainWindowController.macroStartRecording(_:)), "")
+        item(macro, "Stop Recording", #selector(MainWindowController.macroStopRecording(_:)), "")
+        item(macro, "Playback", #selector(MainWindowController.macroPlayback(_:)), "")
+        macro.addItem(.separator())
+        item(macro, "Save Current Macro…", #selector(MainWindowController.macroSave(_:)), "")
+        attach(mainMenu, title: "Macro", menu: macro)
+
+        let plugins = NSMenu(title: "Plugins")
+        pluginsMenu = plugins
+        populatePlugins(plugins)
+        attach(mainMenu, title: "Plugins", menu: plugins)
+
         let run = NSMenu(title: "Run")
         item(run, "Run…", #selector(MainWindowController.runCommand(_:)), "")
         attach(mainMenu, title: "Run", menu: run)
@@ -104,6 +117,7 @@ enum MenuBuilder {
             }
         }
         reloadRecentFiles(target: controller)
+        reloadPlugins(target: controller)
     }
 
     fileprivate static func retargetItem(_ item: NSMenuItem, to controller: MainWindowController) {
@@ -150,6 +164,7 @@ enum MenuBuilder {
     }
 
     private static weak var recentMenu: NSMenu?
+    private static weak var pluginsMenu: NSMenu?
 
     private static func populateRecent(_ menu: NSMenu) {
         menu.removeAllItems()
@@ -174,6 +189,37 @@ enum MenuBuilder {
     static func reloadRecentFiles(target: MainWindowController) {
         guard let menu = recentMenu else { return }
         populateRecent(menu)
+        for child in menu.items {
+            retargetItem(child, to: target)
+        }
+    }
+
+    private static func populatePlugins(_ menu: NSMenu) {
+        menu.removeAllItems()
+        item(menu, "Open Plugins Folder…", #selector(MainWindowController.pluginsOpenFolder(_:)), "")
+        item(menu, "Refresh Plugin List", #selector(MainWindowController.pluginsRefresh(_:)), "")
+        menu.addItem(.separator())
+        let entries = PluginHost.discover()
+        if entries.isEmpty {
+            let empty = menu.addItem(withTitle: "(No plugins found)", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+        } else {
+            for e in entries {
+                let i = menu.addItem(
+                    withTitle: e.name,
+                    action: #selector(MainWindowController.pluginsInvoke(_:)),
+                    keyEquivalent: ""
+                )
+                i.representedObject = e.url
+                i.toolTip = e.url.path
+                i.target = nil
+            }
+        }
+    }
+
+    static func reloadPlugins(target: MainWindowController) {
+        guard let menu = pluginsMenu else { return }
+        populatePlugins(menu)
         for child in menu.items {
             retargetItem(child, to: target)
         }

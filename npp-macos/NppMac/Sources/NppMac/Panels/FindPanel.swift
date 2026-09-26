@@ -120,35 +120,123 @@ final class FindPanel: NSView {
         onHide()
     }
 
-    /// Recursive literal find-in-files over `directory`.
-    func findInFiles(directory: URL, done: @escaping ([Hit]) -> Void) {
+    /// Recursive find-in-files with filters / excludes and Find-panel options.
+    func findInFiles(
+        directory: URL,
+        filters: String,
+        excludes: String,
+        options: Options,
+        done: @escaping ([Hit]) -> Void
+    ) {
         let needle = findField.stringValue
-        let caseSensitive = caseBox.state == .on
+        let includeGlobs = Self.splitList(filters)
+        let excludeParts = Self.splitList(excludes).map { $0.lowercased() }
         DispatchQueue.global(qos: .userInitiated).async {
             var hits: [Hit] = []
             let fm = FileManager.default
-            if let enumerator = fm.enumerator(
+            guard let enumerator = fm.enumerator(
                 at: directory,
-                includingPropertiesForKeys: [.isRegularFileKey],
+                includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
                 options: [.skipsHiddenFiles, .skipsPackageDescendants]
-            ) {
-                for case let url as URL in enumerator {
+            ) else {
+                DispatchQueue.main.async { done([]) }
+                return
+            }
+            for case let url as URL in enumerator {
+                if hits.count > 2000 { break }
+                // Skip excluded directory names (prune by telling enumerator to skip descendants).
+                let pathLower = url.path.lowercased()
+                if excludeParts.contains(where: { part in
+                    guard !part.isEmpty else { return false }
+                    return pathLower.contains("/\(part)/") || pathLower.hasSuffix("/\(part)")
+                }) {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                var isDir: ObjCBool = false
+                guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { continue }
+                if !includeGlobs.isEmpty, !Self.matchesAnyGlob(url.lastPathComponent, globs: includeGlobs) {
+                    continue
+                }
+                guard let data = try? Data(contentsOf: url), data.count < 5_000_000,
+                      let text = String(data: data, encoding: .utf8)
+                else { continue }
+                guard !needle.isEmpty else { continue }
+                let lineHits = Self.matchLines(in: text, needle: needle, options: options)
+                for (line, preview) in lineHits {
+                    hits.append(Hit(file: url, line: line, preview: preview))
                     if hits.count > 2000 { break }
-                    guard let data = try? Data(contentsOf: url), data.count < 5_000_000,
-                          let text = String(data: data, encoding: .utf8)
-                    else { continue }
-                    let cmp: String.CompareOptions = caseSensitive ? [] : .caseInsensitive
-                    if text.range(of: needle, options: cmp) == nil || needle.isEmpty { continue }
-                    for (i, line) in text.components(separatedBy: "\n").enumerated() {
-                        if line.range(of: needle, options: cmp) != nil {
-                            hits.append(Hit(file: url, line: i + 1, preview: String(line.prefix(160))))
-                            if hits.count > 2000 { break }
-                        }
-                    }
                 }
             }
             let result = hits
             DispatchQueue.main.async { done(result) }
         }
+    }
+
+    private static func splitList(_ s: String) -> [String] {
+        s.split(whereSeparator: { $0 == ";" || $0 == "," || $0 == " " })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private static func matchesAnyGlob(_ name: String, globs: [String]) -> Bool {
+        for g in globs {
+            if g == "*" || g == "*.*" { return true }
+            if g.hasPrefix("*.") {
+                let ext = String(g.dropFirst(2))
+                if name.lowercased().hasSuffix("." + ext.lowercased()) { return true }
+            } else if g.contains("*") {
+                let pattern = NSRegularExpression.escapedPattern(for: g)
+                    .replacingOccurrences(of: "\\*", with: ".*")
+                if let re = try? NSRegularExpression(pattern: "^\(pattern)$", options: .caseInsensitive),
+                   re.firstMatch(in: name, range: NSRange(location: 0, length: (name as NSString).length)) != nil
+                {
+                    return true
+                }
+            } else if name.caseInsensitiveCompare(g) == .orderedSame {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func matchLines(in text: String, needle: String, options: Options) -> [(Int, String)] {
+        var out: [(Int, String)] = []
+        let lines = text.components(separatedBy: "\n")
+        if options.regex {
+            var pattern = needle
+            if options.wholeWord { pattern = "\\b(?:\(needle))\\b" }
+            let reOpts: NSRegularExpression.Options = options.caseSensitive ? [] : .caseInsensitive
+            guard let re = try? NSRegularExpression(pattern: pattern, options: reOpts) else { return [] }
+            for (i, line) in lines.enumerated() {
+                let range = NSRange(location: 0, length: (line as NSString).length)
+                if re.firstMatch(in: line, range: range) != nil {
+                    out.append((i + 1, String(line.prefix(160))))
+                }
+            }
+            return out
+        }
+        let cmp: String.CompareOptions = options.caseSensitive ? [] : .caseInsensitive
+        let isWord: (Character) -> Bool = { $0.isLetter || $0.isNumber || $0 == "_" }
+        for (i, line) in lines.enumerated() {
+            var from = line.startIndex
+            var matched = false
+            while let r = line.range(of: needle, options: cmp, range: from..<line.endIndex) {
+                if options.wholeWord {
+                    let leftOK = r.lowerBound == line.startIndex || !isWord(line[line.index(before: r.lowerBound)])
+                    let rightOK = r.upperBound == line.endIndex || !isWord(line[r.upperBound])
+                    if leftOK, rightOK { matched = true; break }
+                } else {
+                    matched = true
+                    break
+                }
+                from = r.upperBound
+                if from == line.endIndex { break }
+            }
+            if matched {
+                out.append((i + 1, String(line.prefix(160))))
+            }
+        }
+        return out
     }
 }

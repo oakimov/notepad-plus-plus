@@ -17,11 +17,12 @@ Phased Notepad++ macOS parity on NSTextView + Rust FFI.
 - Encoding UTF-16 LE/BE + EOL Conversion (CRLF/LF/CR)
 - Status bar: Ln/Col + EOL + language display name
 
-## Done — Phase 3 (partial): Edit extras + Rust search
+## Done — Phase 3: Edit extras + Rust search + FiF filters
 
 - Toggle Line Comment, Sort Lines, Indent / Unindent in Edit menu
 - Find panel: Replace / Replace All / Count via `npp-core` search FFI
 - Fancy-regex + literal/whole-word find through Rust
+- Find-in-Files: include globs, directory excludes, case/word/regex options
 
 ## Done — Phase 4 (partial): Session + prefs + disk watch
 
@@ -37,14 +38,12 @@ Phased Notepad++ macOS parity on NSTextView + Rust FFI.
 - Document switcher jump buttons 1–9
 - Folder as Workspace sidebar, Function List (regex symbols)
 
-## Done — Phase 6 (partial): Tools / Run / Settings
+## Done — Phase 6 (partial): Tools / Run / Macro / Plugins shell
 
-- Settings → Preferences, Tools MD5/SHA-256 (file + selection), Run… (`$FILE`)
+- Settings → Preferences, Tools MD5/SHA-256, Run… (`$FILE`)
+- Macro record/stop/playback/save (text-insert steps)
+- Plugins menu: discover `.dylib`/`.bundle` under Application Support, open folder
 - Window menu shell
-
-## Phase 3 — remaining
-
-Find-in-Files filters.
 
 ## Phase 4 — remaining
 
@@ -52,7 +51,7 @@ Find-in-Files filters.
 
 ## Phase 6 — remaining
 
-Macro menu, Plugins dylib host.
+Full Notepad++ plugin ABI / dylib load + invoke.
 
 ## Phase 7 — Stretch
 

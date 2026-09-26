@@ -36,4 +36,22 @@ enum AppPrefs {
         }
         set { defaults.set(newValue, forKey: "tabWidth") }
     }
+
+    /// Find-in-Files include globs, e.g. `*.swift;*.rs;*.md` (empty = all text files).
+    static var fifFilters: String {
+        get {
+            defaults.string(forKey: "fifFilters")
+                ?? "*.swift;*.rs;*.py;*.js;*.ts;*.go;*.c;*.h;*.cpp;*.hpp;*.java;*.cs;*.rb;*.php;*.md;*.txt;*.xml;*.json;*.yml;*.yaml;*.toml;*.sh"
+        }
+        set { defaults.set(newValue, forKey: "fifFilters") }
+    }
+
+    /// Directory name fragments to skip, e.g. `node_modules;.git;target;build`.
+    static var fifExcludes: String {
+        get {
+            defaults.string(forKey: "fifExcludes")
+                ?? "node_modules;.git;target;build;Dist;dist;.build;DerivedData"
+        }
+        set { defaults.set(newValue, forKey: "fifExcludes") }
+    }
 }
