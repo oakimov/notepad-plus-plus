@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 
 /// Main window: internal tab bar + editor view + status bar + find panel.
 final class MainWindowController: NSWindowController {
@@ -7,6 +8,14 @@ final class MainWindowController: NSWindowController {
     private let statusLabel: NSTextField
     private var tabBar: TabBarView?
     private var findPanel: FindPanel?
+    private var folderPanel: FolderBrowserPanel?
+    private var functionListPanel: FunctionListPanel?
+    private var folderWidth: NSLayoutConstraint?
+    private var functionWidth: NSLayoutConstraint?
+    private var folderVisible = false
+    private var functionListVisible = false
+    private var diskWatchTimer: Timer?
+    private var knownMtimes: [String: Date] = [:]
     private weak var editorScroll: NSScrollView?
     private var lineNumberRuler: LineNumberRulerView?
     private var wordWrapEnabled = false
@@ -51,7 +60,20 @@ final class MainWindowController: NSWindowController {
         window.delegate = self
         textView.delegate = self
         buildContent(in: window)
+        applyPrefsFromStore()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(prefsDidChange(_:)),
+            name: .nppPrefsDidChange,
+            object: nil
+        )
+        startDiskWatchIfNeeded()
         refresh()
+    }
+
+    deinit {
+        diskWatchTimer?.invalidate()
+        NotificationCenter.default.removeObserver(self)
     }
 
     @available(*, unavailable)
@@ -128,33 +150,57 @@ final class MainWindowController: NSWindowController {
         find.isHidden = true
         findPanel = find
 
+        let folder = FolderBrowserPanel()
+        folder.onOpenFile = { [weak self] url in self?.openPaths([url.path]) }
+        folder.isHidden = true
+        folderPanel = folder
+
+        let functions = FunctionListPanel()
+        functions.onJump = { [weak self] line in self?.goToLineNumber(line) }
+        functions.isHidden = true
+        functionListPanel = functions
+
         statusLabel.font = NSFont.systemFont(ofSize: 11)
         statusLabel.lineBreakMode = .byTruncatingMiddle
         statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        for view in [tabs, scroll, find, statusLabel] as [NSView] {
+        for view in [tabs, folder, scroll, functions, find, statusLabel] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(view)
         }
         let aboveFind = scroll.bottomAnchor.constraint(equalTo: find.topAnchor)
         let aboveStatus = scroll.bottomAnchor.constraint(equalTo: statusLabel.topAnchor, constant: -2)
         let statusH = statusLabel.heightAnchor.constraint(equalToConstant: 0)
+        let folderW = folder.widthAnchor.constraint(equalToConstant: 0)
+        let functionW = functions.widthAnchor.constraint(equalToConstant: 0)
         editorAboveFind = aboveFind
         editorAboveStatus = aboveStatus
         statusHeight = statusH
+        folderWidth = folderW
+        functionWidth = functionW
         NSLayoutConstraint.activate([
             tabs.topAnchor.constraint(equalTo: root.topAnchor),
             tabs.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             tabs.trailingAnchor.constraint(equalTo: root.trailingAnchor),
 
+            folder.topAnchor.constraint(equalTo: tabs.bottomAnchor),
+            folder.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            folder.bottomAnchor.constraint(equalTo: statusLabel.topAnchor, constant: -2),
+            folderW,
+
+            functions.topAnchor.constraint(equalTo: tabs.bottomAnchor),
+            functions.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            functions.bottomAnchor.constraint(equalTo: statusLabel.topAnchor, constant: -2),
+            functionW,
+
             scroll.topAnchor.constraint(equalTo: tabs.bottomAnchor),
-            scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            scroll.leadingAnchor.constraint(equalTo: folder.trailingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: functions.leadingAnchor),
             scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 80),
             aboveStatus,
 
-            find.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            find.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            find.leadingAnchor.constraint(equalTo: folder.trailingAnchor),
+            find.trailingAnchor.constraint(equalTo: functions.leadingAnchor),
             find.bottomAnchor.constraint(equalTo: statusLabel.topAnchor, constant: -2),
 
             statusLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 6),
@@ -203,6 +249,8 @@ final class MainWindowController: NSWindowController {
         )
         scheduleHighlight()
         refreshLineNumbers()
+        refreshFunctionList()
+        recordKnownMtimes()
     }
 
     private func updateChrome(title: String, isDirty: Bool, encoding: String, language: String, eol: String) {
@@ -251,6 +299,7 @@ final class MainWindowController: NSWindowController {
                 )
             }
             self.refreshLineNumbers()
+            self.refreshFunctionList()
         }
         syncWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
@@ -606,9 +655,13 @@ final class MainWindowController: NSWindowController {
             return
         }
         do {
+            if let url = store.tabs[index].fileURL {
+                maybeBackup(url)
+            }
             try store.save(at: index)
-            if let path = store.tabs[index].fileURL?.path {
-                SessionStore.pushRecent(path)
+            if let url = store.tabs[index].fileURL {
+                SessionStore.pushRecent(url.path)
+                knownMtimes[url.path] = Self.mtime(of: url)
             }
             persistSession()
             MenuBuilder.reloadRecentFiles(target: self)
@@ -630,6 +683,7 @@ final class MainWindowController: NSWindowController {
 
     /// Restore last session if no argv/Finder files were opened.
     func restoreSessionIfNeeded() {
+        guard AppPrefs.restoreSession else { return }
         let paths = SessionStore.loadSession()
         guard !paths.isEmpty else { return }
         openPaths(paths)
@@ -651,8 +705,10 @@ final class MainWindowController: NSWindowController {
         let handler: (NSApplication.ModalResponse) -> Void = { [weak self] result in
             guard let self, result == .OK, let url = panel.url else { done(false); return }
             do {
+                // Save As: no prior file to back up at dest.
                 try self.store.save(at: index, to: url)
                 SessionStore.pushRecent(url.path)
+                self.knownMtimes[url.path] = Self.mtime(of: url)
                 self.persistSession()
                 MenuBuilder.reloadRecentFiles(target: self)
                 done(true)
@@ -1015,6 +1071,169 @@ final class MainWindowController: NSWindowController {
         applyEditorFont()
     }
 
+    @objc func viewToggleFolder(_ sender: Any?) {
+        folderVisible.toggle()
+        folderPanel?.isHidden = !folderVisible
+        folderWidth?.constant = folderVisible ? 220 : 0
+    }
+
+    @objc func viewToggleFunctionList(_ sender: Any?) {
+        functionListVisible.toggle()
+        functionListPanel?.isHidden = !functionListVisible
+        functionWidth?.constant = functionListVisible ? 200 : 0
+        if functionListVisible {
+            refreshFunctionList()
+        }
+    }
+
+    private func refreshFunctionList() {
+        guard functionListVisible else { return }
+        let lang = store.selectedMeta()?.language ?? "normal"
+        functionListPanel?.reload(text: textView.string, language: lang)
+    }
+
+    @objc func toolsMD5(_ sender: Any?) { showHash(of: textView.string, algorithm: .md5) }
+    @objc func toolsSHA256(_ sender: Any?) { showHash(of: textView.string, algorithm: .sha256) }
+    @objc func toolsMD5Selection(_ sender: Any?) { showHash(of: selectedText(), algorithm: .md5) }
+    @objc func toolsSHA256Selection(_ sender: Any?) { showHash(of: selectedText(), algorithm: .sha256) }
+
+    private enum HashKind { case md5, sha256 }
+
+    private func selectedText() -> String {
+        let range = textView.selectedRange()
+        guard range.length > 0 else { return "" }
+        return (textView.string as NSString).substring(with: range)
+    }
+
+    private func showHash(of text: String, algorithm: HashKind) {
+        guard !text.isEmpty else { NSSound.beep(); return }
+        let data = Data(text.utf8)
+        let digest: String
+        switch algorithm {
+        case .md5:
+            digest = Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        case .sha256:
+            digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        }
+        let alert = NSAlert()
+        alert.messageText = algorithm == .md5 ? "MD5" : "SHA-256"
+        alert.informativeText = digest
+        alert.addButton(withTitle: "Copy")
+        alert.addButton(withTitle: "OK")
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(digest, forType: .string)
+        }
+    }
+
+    @objc func runCommand(_ sender: Any?) {
+        let alert = NSAlert()
+        alert.messageText = "Run"
+        alert.informativeText = "Shell command (path of current file available as $FILE):"
+        let field = NSTextField(string: "")
+        field.frame = NSRect(x: 0, y: 0, width: 360, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Run")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        var cmd = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cmd.isEmpty else { return }
+        if let path = store.selectedMeta()?.fileURL?.path {
+            cmd = cmd.replacingOccurrences(of: "$FILE", with: "'\(path.replacingOccurrences(of: "'", with: "'\\''"))'")
+        }
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        task.arguments = ["-lc", cmd]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = pipe
+        do {
+            try task.run()
+            task.waitUntilExit()
+            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let result = NSAlert()
+            result.messageText = task.terminationStatus == 0 ? "Command finished" : "Exit \(task.terminationStatus)"
+            result.informativeText = out.isEmpty ? "(no output)" : String(out.prefix(4000))
+            result.runModal()
+        } catch {
+            presentError(error)
+        }
+    }
+
+    private func maybeBackup(_ url: URL) {
+        guard AppPrefs.backupOnSave else { return }
+        let bak = url.appendingPathExtension("bak")
+        try? FileManager.default.removeItem(at: bak)
+        try? FileManager.default.copyItem(at: url, to: bak)
+    }
+
+    private static func mtime(of url: URL) -> Date? {
+        (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+    }
+
+    private func recordKnownMtimes() {
+        for tab in store.tabs {
+            guard let url = tab.fileURL else { continue }
+            knownMtimes[url.path] = Self.mtime(of: url)
+        }
+    }
+
+    private func startDiskWatchIfNeeded() {
+        diskWatchTimer?.invalidate()
+        guard AppPrefs.watchDiskChanges else { return }
+        diskWatchTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            self?.checkDiskChanges()
+        }
+    }
+
+    private func checkDiskChanges() {
+        guard AppPrefs.watchDiskChanges else { return }
+        for (i, tab) in store.tabs.enumerated() {
+            guard let url = tab.fileURL else { continue }
+            let path = url.path
+            guard let now = Self.mtime(of: url) else { continue }
+            if let prev = knownMtimes[path], now > prev.addingTimeInterval(0.5) {
+                knownMtimes[path] = now
+                if i == store.selectedIndex, !tab.isDirty {
+                    // Auto-reload clean tab.
+                    store.reloadFromDisk(at: i)
+                    if i == store.selectedIndex { refresh() }
+                    statusLabel.stringValue = "Reloaded from disk: \(url.lastPathComponent)"
+                } else if tab.isDirty {
+                    statusLabel.stringValue = "File changed on disk: \(url.lastPathComponent)"
+                }
+            } else if knownMtimes[path] == nil {
+                knownMtimes[path] = now
+            }
+        }
+    }
+
+    @objc private func prefsDidChange(_ note: Notification) {
+        applyPrefsFromStore()
+    }
+
+    private func applyPrefsFromStore() {
+        wordWrapEnabled = AppPrefs.wordWrapDefault
+        applyWrapMode()
+        lineNumbersVisible = AppPrefs.showLineNumbers
+        editorScroll?.rulersVisible = lineNumbersVisible
+        applyTabWidth(AppPrefs.tabWidth)
+        startDiskWatchIfNeeded()
+    }
+
+    private func applyTabWidth(_ n: Int) {
+        let font = editorFont
+        let space = NSAttributedString(string: String(repeating: " ", count: max(n, 1)), attributes: [.font: font])
+        let width = space.size().width
+        textView.defaultParagraphStyle = {
+            let p = NSMutableParagraphStyle()
+            p.defaultTabInterval = width
+            p.tabStops = []
+            return p
+        }()
+        textView.typingAttributes[.paragraphStyle] = textView.defaultParagraphStyle
+    }
+
     private func applyWrapMode() {
         guard let container = textView.textContainer else { return }
         if wordWrapEnabled {
@@ -1218,6 +1437,10 @@ extension MainWindowController: NSMenuItemValidation {
             menuItem.state = wordWrapEnabled ? .on : .off
         } else if menuItem.action == #selector(viewToggleLineNumbers(_:)) {
             menuItem.state = lineNumbersVisible ? .on : .off
+        } else if menuItem.action == #selector(viewToggleFolder(_:)) {
+            menuItem.state = folderVisible ? .on : .off
+        } else if menuItem.action == #selector(viewToggleFunctionList(_:)) {
+            menuItem.state = functionListVisible ? .on : .off
         }
         let enc = store.selectedIndex >= 0 ? store.encoding(at: store.selectedIndex) : nil
         if menuItem.action == #selector(encUtf8(_:)) {

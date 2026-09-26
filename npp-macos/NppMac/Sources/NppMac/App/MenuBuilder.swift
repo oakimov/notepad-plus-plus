@@ -54,6 +54,28 @@ enum MenuBuilder {
         addEncoding(encoding)
         attach(mainMenu, title: "Encoding", menu: encoding)
 
+        let settings = NSMenu(title: "Settings")
+        item(settings, "Preferences…", #selector(MainWindowController.openPreferences(_:)), ",")
+        attach(mainMenu, title: "Settings", menu: settings)
+
+        let tools = NSMenu(title: "Tools")
+        item(tools, "MD5 of Current File…", #selector(MainWindowController.toolsMD5(_:)), "")
+        item(tools, "SHA-256 of Current File…", #selector(MainWindowController.toolsSHA256(_:)), "")
+        item(tools, "MD5 of Selection…", #selector(MainWindowController.toolsMD5Selection(_:)), "")
+        item(tools, "SHA-256 of Selection…", #selector(MainWindowController.toolsSHA256Selection(_:)), "")
+        attach(mainMenu, title: "Tools", menu: tools)
+
+        let run = NSMenu(title: "Run")
+        item(run, "Run…", #selector(MainWindowController.runCommand(_:)), "")
+        attach(mainMenu, title: "Run", menu: run)
+
+        let windowMenu = NSMenu(title: "Window")
+        item(windowMenu, "Minimize", #selector(NSWindow.performMiniaturize(_:)), "m")
+        item(windowMenu, "Zoom", #selector(NSWindow.performZoom(_:)), "")
+        windowMenu.addItem(.separator())
+        item(windowMenu, "Bring All to Front", #selector(NSApplication.arrangeInFront(_:)), "")
+        attach(mainMenu, title: "Window", menu: windowMenu)
+
         let help = NSMenu(title: "Help")
         item(help, "About NppMac", #selector(MainWindowController.helpAbout(_:)), "")
         attach(mainMenu, title: "Help", menu: help)
@@ -205,6 +227,9 @@ enum MenuBuilder {
     private static func addView(_ m: NSMenu) {
         item(m, "Word Wrap", #selector(MainWindowController.viewToggleWrap(_:)), "")
         item(m, "Show Line Numbers", #selector(MainWindowController.viewToggleLineNumbers(_:)), "")
+        m.addItem(.separator())
+        item(m, "Folder as Workspace", #selector(MainWindowController.viewToggleFolder(_:)), "")
+        item(m, "Function List", #selector(MainWindowController.viewToggleFunctionList(_:)), "")
         m.addItem(.separator())
         item(m, "Zoom In", #selector(MainWindowController.viewZoomIn(_:)), "+")
         item(m, "Zoom Out", #selector(MainWindowController.viewZoomOut(_:)), "-")

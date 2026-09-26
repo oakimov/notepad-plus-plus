@@ -105,6 +105,17 @@ final class DocumentStore {
         return true
     }
 
+    /// Re-read `index`'s file from disk in place (close + reopen pattern).
+    @discardableResult
+    func reloadFromDisk(at index: Int) -> Bool {
+        guard tabs.indices.contains(index), let url = tabs[index].fileURL else { return false }
+        guard openDocument(url: url) else { return false }
+        moveTab(from: count - 1, to: index)
+        close(at: index + 1)
+        select(at: index)
+        return true
+    }
+
     /// Index of an open document backed by `url`, if any.
     func index(of url: URL) -> Int? {
         let target = url.standardizedFileURL.resolvingSymlinksInPath()

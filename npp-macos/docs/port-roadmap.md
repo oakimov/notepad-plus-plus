@@ -23,34 +23,36 @@ Phased Notepad++ macOS parity on NSTextView + Rust FFI.
 - Find panel: Replace / Replace All / Count via `npp-core` search FFI
 - Fancy-regex + literal/whole-word find through Rust
 
-## Done — Phase 4 (partial): Session + recent files
+## Done — Phase 4 (partial): Session + prefs + disk watch
 
-- `session.xml` restore on launch / save on quit
+- `session.xml` restore on launch / save on quit (gated by preference)
 - File → Open Recent (+ Clear Menu)
-- `read_session` / `read_recent` / `write_recent` in npp-config
+- Preferences: wrap, line numbers, backup, session, disk watch, tab width
+- `.bak` backup before save; auto-reload clean tabs on disk change
 
-## Phase 3 — remaining
-
-Find-in-Files filters; Preferences/`config.xml` binding.
-
-## Phase 4 — remaining
-
-Preferences window bound to real settings, backup on save,
-external-change reload.
-
-## Done — Phase 5 (partial): File extras
+## Done — Phase 5 (partial): File extras + panels
 
 - Close All but Current, Open Containing Folder, Copy File Path
 - Rename…, Delete from Disk (Trash)
 - Document switcher jump buttons 1–9
+- Folder as Workspace sidebar, Function List (regex symbols)
 
-## Phase 5 — remaining
+## Done — Phase 6 (partial): Tools / Run / Settings
 
-Function List, Folder as Workspace / file browser sidebar.
+- Settings → Preferences, Tools MD5/SHA-256 (file + selection), Run… (`$FILE`)
+- Window menu shell
 
-## Phase 6 — Plugins host + menus shell
+## Phase 3 — remaining
 
-Settings/Tools/Macro/Run/Plugins/Window; MD5/SHA; Run…; dylib plugin host.
+Find-in-Files filters.
+
+## Phase 4 — remaining
+
+`config.xml` / deeper stylers Preferences.
+
+## Phase 6 — remaining
+
+Macro menu, Plugins dylib host.
 
 ## Phase 7 — Stretch
 
