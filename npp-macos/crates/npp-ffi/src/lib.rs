@@ -942,6 +942,154 @@ pub unsafe extern "C" fn npp_tokens_free(tokens: *mut NppTokenC, count: i32) {
     let _ = Box::from_raw(std::ptr::slice_from_raw_parts_mut(tokens, count as usize));
 }
 
+#[repr(C)]
+pub struct NppMatchC {
+    pub start: u32,
+    pub end: u32,
+}
+
+fn search_opts(match_case: bool, whole_word: bool, regex: bool) -> npp_core::search::SearchOptions {
+    npp_core::search::SearchOptions {
+        match_case,
+        whole_word,
+        regex,
+        dir: npp_core::search::Direction::Forward,
+        wrap: true,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn npp_find_all(
+    text: *const c_char,
+    pattern: *const c_char,
+    match_case: bool,
+    whole_word: bool,
+    regex: bool,
+    out_matches: *mut *mut NppMatchC,
+    err_out: *mut *mut c_char,
+) -> i32 {
+    if !err_out.is_null() {
+        *err_out = ptr::null_mut();
+    }
+    if out_matches.is_null() {
+        return 0;
+    }
+    *out_matches = ptr::null_mut();
+    let Some(text) = cstr_to_str(text) else {
+        return 0;
+    };
+    let Some(pattern) = cstr_to_str(pattern) else {
+        return 0;
+    };
+    let opts = search_opts(match_case, whole_word, regex);
+    match npp_core::search::find_all(text, pattern, opts) {
+        Ok(matches) => {
+            if matches.is_empty() {
+                return 0;
+            }
+            let boxed: Box<[NppMatchC]> = matches
+                .into_iter()
+                .map(|m| NppMatchC {
+                    start: m.start as u32,
+                    end: m.end as u32,
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            let len = boxed.len() as i32;
+            *out_matches = Box::into_raw(boxed) as *mut NppMatchC;
+            len
+        }
+        Err(e) => {
+            if !err_out.is_null() {
+                *err_out = to_cstring(&e.to_string());
+            }
+            -1
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn npp_matches_free(matches: *mut NppMatchC, count: i32) {
+    if matches.is_null() || count <= 0 {
+        return;
+    }
+    let _ = Box::from_raw(std::ptr::slice_from_raw_parts_mut(matches, count as usize));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn npp_find_count(
+    text: *const c_char,
+    pattern: *const c_char,
+    match_case: bool,
+    whole_word: bool,
+    regex: bool,
+    err_out: *mut *mut c_char,
+) -> i32 {
+    if !err_out.is_null() {
+        *err_out = ptr::null_mut();
+    }
+    let Some(text) = cstr_to_str(text) else {
+        return 0;
+    };
+    let Some(pattern) = cstr_to_str(pattern) else {
+        return 0;
+    };
+    match npp_core::search::count(text, pattern, search_opts(match_case, whole_word, regex)) {
+        Ok(n) => n as i32,
+        Err(e) => {
+            if !err_out.is_null() {
+                *err_out = to_cstring(&e.to_string());
+            }
+            -1
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn npp_replace_all(
+    text: *const c_char,
+    pattern: *const c_char,
+    replacement: *const c_char,
+    match_case: bool,
+    whole_word: bool,
+    regex: bool,
+    out_text: *mut *mut c_char,
+    err_out: *mut *mut c_char,
+) -> i32 {
+    if !err_out.is_null() {
+        *err_out = ptr::null_mut();
+    }
+    if !out_text.is_null() {
+        *out_text = ptr::null_mut();
+    }
+    let Some(text) = cstr_to_str(text) else {
+        return -1;
+    };
+    let Some(pattern) = cstr_to_str(pattern) else {
+        return -1;
+    };
+    let replacement = cstr_to_str(replacement).unwrap_or("");
+    match npp_core::search::replace_all(
+        text,
+        pattern,
+        replacement,
+        search_opts(match_case, whole_word, regex),
+    ) {
+        Ok((new_text, n)) => {
+            if !out_text.is_null() {
+                *out_text = to_cstring(&new_text);
+            }
+            n as i32
+        }
+        Err(e) => {
+            if !err_out.is_null() {
+                *err_out = to_cstring(&e.to_string());
+            }
+            -1
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

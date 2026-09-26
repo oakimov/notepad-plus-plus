@@ -286,11 +286,77 @@ pub fn write_session(path: &Path, files: &[SessionFile]) -> Result<(), String> {
     for f in files {
         s.push_str(&format!(
             "<File filename=\"{}\" view=\"{}\" />\n",
-            f.filename, f.view
+            xml_escape(&f.filename),
+            f.view
         ));
     }
     s.push_str("</Session>\n</NotepadPlus>\n");
     std::fs::write(path, s).map_err(|e| e.to_string())
+}
+
+/// Read a minimal `session.xml` produced by [`write_session`].
+pub fn read_session(path: &Path) -> Result<Vec<SessionFile>, String> {
+    use quick_xml::events::Event;
+    use quick_xml::reader::Reader;
+
+    let xml = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut r = Reader::from_str(&xml);
+    r.config_mut().trim_text(true);
+    let mut out = Vec::new();
+    let mut buf = Vec::new();
+    loop {
+        match r.read_event_into(&mut buf) {
+            Ok(Event::Empty(e)) | Ok(Event::Start(e)) if e.name().as_ref() == b"File" => {
+                let mut filename = String::new();
+                let mut view = 0usize;
+                for a in e.attributes().flatten() {
+                    match a.key.as_ref() {
+                        b"filename" => filename = attr(&a),
+                        b"view" => view = attr(&a).parse().unwrap_or(0),
+                        _ => {}
+                    }
+                }
+                if !filename.is_empty() {
+                    out.push(SessionFile { filename, view });
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(e.to_string()),
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(out)
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Persist recent files as a simple newline-separated path list.
+pub fn write_recent(path: &Path, recent: &RecentFiles) -> Result<(), String> {
+    let body = recent
+        .items()
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(path, body + "\n").map_err(|e| e.to_string())
+}
+
+/// Load recent files list from disk.
+pub fn read_recent(path: &Path) -> Result<RecentFiles, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut recent = RecentFiles::new();
+    // Push in reverse so the first line ends up most-recent.
+    let lines: Vec<_> = text.lines().filter(|l| !l.is_empty()).collect();
+    for line in lines.into_iter().rev() {
+        recent.push(PathBuf::from(line));
+    }
+    Ok(recent)
 }
 
 #[cfg(test)]
@@ -359,6 +425,24 @@ mod tests {
         .unwrap();
         let text = std::fs::read_to_string(&p).unwrap();
         assert!(text.contains("/a.txt"));
+        let loaded = read_session(&p).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].filename, "/a.txt");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn recent_round_trip() {
+        let dir = std::env::temp_dir().join("nppmac-config-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let p = dir.join("recent.txt");
+        let mut r = RecentFiles::new();
+        r.push(PathBuf::from("/z"));
+        r.push(PathBuf::from("/a"));
+        write_recent(&p, &r).unwrap();
+        let loaded = read_recent(&p).unwrap();
+        assert_eq!(loaded.items()[0], PathBuf::from("/a"));
+        assert_eq!(loaded.items()[1], PathBuf::from("/z"));
         let _ = std::fs::remove_file(&p);
     }
 }

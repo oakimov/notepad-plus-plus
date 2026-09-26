@@ -13,7 +13,9 @@ final class FindPanel: NSView {
         var find: String
         var replace: String
         var replaceAll: Bool
+        var replaceOne: Bool
         var findNext: Bool
+        var countOnly: Bool
         var options: Options
     }
 
@@ -67,9 +69,15 @@ final class FindPanel: NSView {
         let next = NSButton(title: "Find Next", target: self, action: #selector(nextClicked(_:)))
         next.bezelStyle = .rounded
         stack.addArrangedSubview(next)
+        let replaceOne = NSButton(title: "Replace", target: self, action: #selector(replaceOneClicked(_:)))
+        replaceOne.bezelStyle = .rounded
+        stack.addArrangedSubview(replaceOne)
         let all = NSButton(title: "Replace All", target: self, action: #selector(replaceAllClicked(_:)))
         all.bezelStyle = .rounded
         stack.addArrangedSubview(all)
+        let count = NSButton(title: "Count", target: self, action: #selector(countClicked(_:)))
+        count.bezelStyle = .rounded
+        stack.addArrangedSubview(count)
         let hide = NSButton(title: "Hide", target: self, action: #selector(hideClicked(_:)))
         hide.bezelStyle = .inline
         stack.addArrangedSubview(hide)
@@ -93,11 +101,19 @@ final class FindPanel: NSView {
     }
 
     @objc private func nextClicked(_ sender: Any?) {
-        onFind(Request(find: findField.stringValue, replace: replaceField.stringValue, replaceAll: false, findNext: true, options: options))
+        onFind(Request(find: findField.stringValue, replace: replaceField.stringValue, replaceAll: false, replaceOne: false, findNext: true, countOnly: false, options: options))
+    }
+
+    @objc private func replaceOneClicked(_ sender: Any?) {
+        onFind(Request(find: findField.stringValue, replace: replaceField.stringValue, replaceAll: false, replaceOne: true, findNext: false, countOnly: false, options: options))
     }
 
     @objc private func replaceAllClicked(_ sender: Any?) {
-        onFind(Request(find: findField.stringValue, replace: replaceField.stringValue, replaceAll: true, findNext: false, options: options))
+        onFind(Request(find: findField.stringValue, replace: replaceField.stringValue, replaceAll: true, replaceOne: false, findNext: false, countOnly: false, options: options))
+    }
+
+    @objc private func countClicked(_ sender: Any?) {
+        onFind(Request(find: findField.stringValue, replace: replaceField.stringValue, replaceAll: false, replaceOne: false, findNext: false, countOnly: true, options: options))
     }
 
     @objc private func hideClicked(_ sender: Any?) {

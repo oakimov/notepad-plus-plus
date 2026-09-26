@@ -44,6 +44,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 controller.openPaths(paths)
             }
+        } else {
+            DispatchQueue.main.async {
+                controller.restoreSessionIfNeeded()
+            }
         }
     }
 
@@ -96,8 +100,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Prompt for every unsaved document before quitting (Cmd-Q / Dock Quit).
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        windowController?.persistSession()
         guard let wc = windowController, wc.hasUnsavedDocuments else { return .terminateNow }
         wc.confirmCloseAll { proceed in
+            if proceed { wc.persistSession() }
             sender.reply(toApplicationShouldTerminate: proceed)
         }
         return .terminateLater

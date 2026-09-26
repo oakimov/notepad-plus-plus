@@ -81,9 +81,10 @@ enum MenuBuilder {
                 retargetItem(item, to: controller)
             }
         }
+        reloadRecentFiles(target: controller)
     }
 
-    private static func retargetItem(_ item: NSMenuItem, to controller: MainWindowController) {
+    fileprivate static func retargetItem(_ item: NSMenuItem, to controller: MainWindowController) {
         if let action = item.action, item.target == nil, controller.responds(to: action) {
             item.target = controller
         }
@@ -99,6 +100,12 @@ enum MenuBuilder {
         item(m, "Open…", #selector(MainWindowController.fileOpen(_:)), "o")
         item(m, "Reload from Disk", #selector(MainWindowController.fileReload(_:)), "r")
         m.addItem(.separator())
+        let recent = NSMenu(title: "Open Recent")
+        recentMenu = recent
+        populateRecent(recent)
+        let recentParent = m.addItem(withTitle: "Open Recent", action: nil, keyEquivalent: "")
+        m.setSubmenu(recent, for: recentParent)
+        m.addItem(.separator())
         item(m, "Save", #selector(MainWindowController.fileSave(_:)), "s")
         item(m, "Save As…", #selector(MainWindowController.fileSaveAs(_:)), "S")
         let saveAll = m.addItem(withTitle: "Save All", action: #selector(MainWindowController.fileSaveAll(_:)), keyEquivalent: "s")
@@ -107,6 +114,36 @@ enum MenuBuilder {
         m.addItem(.separator())
         item(m, "Close Tab", #selector(MainWindowController.fileClose(_:)), "w")
         item(m, "Close All Tabs", #selector(MainWindowController.fileCloseAll(_:)), "W")
+    }
+
+    private static weak var recentMenu: NSMenu?
+
+    private static func populateRecent(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let paths = SessionStore.loadRecent()
+        if paths.isEmpty {
+            let empty = menu.addItem(withTitle: "(Empty)", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+        } else {
+            for path in paths {
+                let title = (path as NSString).lastPathComponent
+                let i = menu.addItem(withTitle: title, action: #selector(MainWindowController.openRecentFile(_:)), keyEquivalent: "")
+                i.representedObject = path
+                i.toolTip = path
+                i.target = nil
+            }
+            menu.addItem(.separator())
+            item(menu, "Clear Menu", #selector(MainWindowController.clearRecentFiles(_:)), "")
+        }
+    }
+
+    /// Refresh Open Recent after opens/saves.
+    static func reloadRecentFiles(target: MainWindowController) {
+        guard let menu = recentMenu else { return }
+        populateRecent(menu)
+        for child in menu.items {
+            retargetItem(child, to: target)
+        }
     }
 
     private static func addEdit(_ m: NSMenu) {

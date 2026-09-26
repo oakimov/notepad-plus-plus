@@ -179,6 +179,61 @@ final class NppEngine {
         return Self.color(fromRGBHex: hex) ?? Self.fallbackColor(forScope: scope)
     }
 
+    struct Match {
+        var range: NSRange
+    }
+
+    /// Find all matches via Rust search engine (byte→UTF-16 mapped).
+    func findAll(in text: String, pattern: String, caseSensitive: Bool, wholeWord: Bool, regex: Bool) throws -> [Match] {
+        let safe = text.replacingOccurrences(of: "\0", with: "\u{FFFD}")
+        var out: UnsafeMutablePointer<NppMatch>?
+        var err: UnsafeMutablePointer<CChar>?
+        let n = safe.withCString { textC in
+            pattern.withCString { patC in
+                npp_find_all(textC, patC, caseSensitive, wholeWord, regex, &out, &err)
+            }
+        }
+        if let err {
+            throw NSError(domain: "NppEngine", code: 2, userInfo: [NSLocalizedDescriptionKey: Self.takeString(err)])
+        }
+        guard n > 0, let out else { return [] }
+        defer { npp_matches_free(out, n) }
+        return Self.matchesFromUTF8(out, count: Int(n), text: safe)
+    }
+
+    func findCount(in text: String, pattern: String, caseSensitive: Bool, wholeWord: Bool, regex: Bool) throws -> Int {
+        let safe = text.replacingOccurrences(of: "\0", with: "\u{FFFD}")
+        var err: UnsafeMutablePointer<CChar>?
+        let n = safe.withCString { textC in
+            pattern.withCString { patC in
+                npp_find_count(textC, patC, caseSensitive, wholeWord, regex, &err)
+            }
+        }
+        if let err {
+            throw NSError(domain: "NppEngine", code: 2, userInfo: [NSLocalizedDescriptionKey: Self.takeString(err)])
+        }
+        return Int(n)
+    }
+
+    func replaceAll(in text: String, pattern: String, replacement: String, caseSensitive: Bool, wholeWord: Bool, regex: Bool) throws -> (String, Int) {
+        let safe = text.replacingOccurrences(of: "\0", with: "\u{FFFD}")
+        var outText: UnsafeMutablePointer<CChar>?
+        var err: UnsafeMutablePointer<CChar>?
+        let n = safe.withCString { textC in
+            pattern.withCString { patC in
+                replacement.withCString { repC in
+                    npp_replace_all(textC, patC, repC, caseSensitive, wholeWord, regex, &outText, &err)
+                }
+            }
+        }
+        if let err {
+            throw NSError(domain: "NppEngine", code: 2, userInfo: [NSLocalizedDescriptionKey: Self.takeString(err)])
+        }
+        guard n >= 0, let outText else { return (text, 0) }
+        let result = Self.takeString(outText)
+        return (result, Int(n))
+    }
+
     struct Token {
         var range: NSRange
         var scope: Int32
@@ -228,6 +283,32 @@ final class NppEngine {
     }
 
     private static func tokensFromUTF8(_ out: UnsafeMutablePointer<NppToken>, count: Int, text: String) -> [Token] {
+        let map = utf16Map(for: text)
+        var tokens: [Token] = []
+        tokens.reserveCapacity(count)
+        for i in 0..<count {
+            let t = out[i]
+            if let range = rangeFromUTF8(start: Int(t.start), end: Int(t.end), map: map) {
+                tokens.append(Token(range: range, scope: Int32(t.scope.rawValue)))
+            }
+        }
+        return tokens
+    }
+
+    private static func matchesFromUTF8(_ out: UnsafeMutablePointer<NppMatch>, count: Int, text: String) -> [Match] {
+        let map = utf16Map(for: text)
+        var matches: [Match] = []
+        matches.reserveCapacity(count)
+        for i in 0..<count {
+            let m = out[i]
+            if let range = rangeFromUTF8(start: Int(m.start), end: Int(m.end), map: map) {
+                matches.append(Match(range: range))
+            }
+        }
+        return matches
+    }
+
+    private static func utf16Map(for text: String) -> [Int] {
         var utf8ToUTF16 = [Int](repeating: -1, count: text.utf8.count + 1)
         var u8 = 0
         var u16 = 0
@@ -239,24 +320,20 @@ final class NppEngine {
                 utf8ToUTF16[u8] = u16
             }
         }
-        var tokens: [Token] = []
-        tokens.reserveCapacity(count)
-        for i in 0..<count {
-            let t = out[i]
-            let start8 = Int(t.start)
-            let end8 = Int(t.end)
-            guard start8 <= end8,
-                  start8 < utf8ToUTF16.count,
-                  end8 < utf8ToUTF16.count,
-                  utf8ToUTF16[start8] >= 0,
-                  utf8ToUTF16[end8] >= 0
-            else { continue }
-            let loc = utf8ToUTF16[start8]
-            let len = utf8ToUTF16[end8] - loc
-            guard len >= 0 else { continue }
-            tokens.append(Token(range: NSRange(location: loc, length: len), scope: Int32(t.scope.rawValue)))
-        }
-        return tokens
+        return utf8ToUTF16
+    }
+
+    private static func rangeFromUTF8(start: Int, end: Int, map: [Int]) -> NSRange? {
+        guard start <= end,
+              start < map.count,
+              end < map.count,
+              map[start] >= 0,
+              map[end] >= 0
+        else { return nil }
+        let loc = map[start]
+        let len = map[end] - loc
+        guard len >= 0 else { return nil }
+        return NSRange(location: loc, length: len)
     }
 }
 

@@ -17,20 +17,26 @@ Phased Notepad++ macOS parity on NSTextView + Rust FFI.
 - Encoding UTF-16 LE/BE + EOL Conversion (CRLF/LF/CR)
 - Status bar: Ln/Col + EOL + language display name
 
-## Done — Phase 3 (partial): Edit extras
+## Done — Phase 3 (partial): Edit extras + Rust search
 
 - Toggle Line Comment, Sort Lines, Indent / Unindent in Edit menu
-- Full FFI search/lineops + Find replace-all still pending
+- Find panel: Replace / Replace All / Count via `npp-core` search FFI
+- Fancy-regex + literal/whole-word find through Rust
+
+## Done — Phase 4 (partial): Session + recent files
+
+- `session.xml` restore on launch / save on quit
+- File → Open Recent (+ Clear Menu)
+- `read_session` / `read_recent` / `write_recent` in npp-config
 
 ## Phase 3 — remaining
 
-Wire `npp-core` search/lineops through FFI; Find replace-one/all/count;
-Find-in-Files filters.
+Find-in-Files filters; Preferences/`config.xml` binding.
 
-## Phase 4 — Session, recent files, Preferences
+## Phase 4 — remaining
 
-`session.xml` / `config.xml`, File→Recent, Preferences bound to settings,
-backup on save, external-change reload.
+Preferences window bound to real settings, backup on save,
+external-change reload.
 
 ## Phase 5 — View panels + File extras
 

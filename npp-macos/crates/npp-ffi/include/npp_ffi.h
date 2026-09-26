@@ -114,6 +114,28 @@ int32_t npp_highlight(NppEngine *engine, const char *lang, const char *text,
                       NppToken **out_tokens);
 void npp_tokens_free(NppToken *tokens, int32_t count);
 
+/// Byte-offset match range (UTF-8).
+typedef struct NppMatch {
+    uint32_t start;
+    uint32_t end;
+} NppMatch;
+
+/// Find all matches. Allocates *out_matches; free with npp_matches_free.
+/// Returns count, or -1 on invalid regex (optional err_out).
+int32_t npp_find_all(const char *text, const char *pattern,
+                     bool match_case, bool whole_word, bool regex,
+                     NppMatch **out_matches, char **err_out);
+void npp_matches_free(NppMatch *matches, int32_t count);
+
+/// Count matches (−1 on regex error).
+int32_t npp_find_count(const char *text, const char *pattern,
+                       bool match_case, bool whole_word, bool regex, char **err_out);
+
+/// Replace all; writes new UTF-8 text to *out_text (caller frees). Returns replacement count (−1 on error).
+int32_t npp_replace_all(const char *text, const char *pattern, const char *replacement,
+                        bool match_case, bool whole_word, bool regex,
+                        char **out_text, char **err_out);
+
 #ifdef __cplusplus
 }
 #endif

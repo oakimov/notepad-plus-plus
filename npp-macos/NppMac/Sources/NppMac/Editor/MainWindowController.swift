@@ -444,11 +444,14 @@ final class MainWindowController: NSWindowController {
                 && store.text(at: 0).isEmpty
             if store.openDocument(url: url) {
                 if replaceFresh { store.close(at: 0) }
+                SessionStore.pushRecent(url.path)
             } else {
                 failed.append(url.lastPathComponent)
             }
         }
         refresh()
+        persistSession()
+        MenuBuilder.reloadRecentFiles(target: self)
         guard !failed.isEmpty, let window else { return }
         let alert = NSAlert()
         alert.messageText = failed.count == 1
@@ -531,11 +534,42 @@ final class MainWindowController: NSWindowController {
         }
         do {
             try store.save(at: index)
+            if let path = store.tabs[index].fileURL?.path {
+                SessionStore.pushRecent(path)
+            }
+            persistSession()
+            MenuBuilder.reloadRecentFiles(target: self)
             done(true)
         } catch {
             presentError(error)
             done(false)
         }
+    }
+
+    /// Paths of open documents with a file URL (for session.xml).
+    func sessionPaths() -> [String] {
+        store.tabs.compactMap { $0.fileURL?.path }
+    }
+
+    func persistSession() {
+        SessionStore.saveSession(paths: sessionPaths())
+    }
+
+    /// Restore last session if no argv/Finder files were opened.
+    func restoreSessionIfNeeded() {
+        let paths = SessionStore.loadSession()
+        guard !paths.isEmpty else { return }
+        openPaths(paths)
+    }
+
+    @objc func openRecentFile(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem, let path = item.representedObject as? String else { return }
+        openPaths([path])
+    }
+
+    @objc func clearRecentFiles(_ sender: Any?) {
+        try? "".write(to: SessionStore.recentURL, atomically: true, encoding: .utf8)
+        MenuBuilder.reloadRecentFiles(target: self)
     }
 
     private func runSavePanel(for index: Int, done: @escaping (Bool) -> Void) {
@@ -545,6 +579,9 @@ final class MainWindowController: NSWindowController {
             guard let self, result == .OK, let url = panel.url else { done(false); return }
             do {
                 try self.store.save(at: index, to: url)
+                SessionStore.pushRecent(url.path)
+                self.persistSession()
+                MenuBuilder.reloadRecentFiles(target: self)
                 done(true)
             } catch {
                 self.presentError(error)
@@ -747,25 +784,70 @@ final class MainWindowController: NSWindowController {
 
     private func performFind(_ req: FindPanel.Request) {
         let text = textView.string
-        let results = matchRanges(in: text, find: req.find, options: req.options)
-        if req.replaceAll {
-            guard !results.isEmpty else { NSSound.beep(); return }
-            let out: String
-            if req.options.regex, let re = Self.regex(for: req.find, options: req.options) {
-                out = re.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: (text as NSString).length), withTemplate: req.replace)
-            } else {
-                let buf = NSMutableString(string: text)
-                for r in results.reversed() { buf.replaceCharacters(in: r, with: req.replace) }
-                out = buf as String
+        let opts = req.options
+        do {
+            if req.countOnly {
+                let n = try store.findCount(
+                    in: text,
+                    pattern: req.find,
+                    caseSensitive: opts.caseSensitive,
+                    wholeWord: opts.wholeWord,
+                    regex: opts.regex
+                )
+                statusLabel.stringValue = "Count: \(n) matches"
+                return
             }
-            applyEditorText(out, caret: textView.selectedRange().location)
-            return
+            if req.replaceAll {
+                let (out, n) = try store.replaceAll(
+                    in: text,
+                    pattern: req.find,
+                    replacement: req.replace,
+                    caseSensitive: opts.caseSensitive,
+                    wholeWord: opts.wholeWord,
+                    regex: opts.regex
+                )
+                guard n > 0 else { NSSound.beep(); return }
+                applyEditorText(out, caret: textView.selectedRange().location)
+                statusLabel.stringValue = "Replaced \(n) occurrence(s)"
+                return
+            }
+            let results = try store.findAll(
+                in: text,
+                pattern: req.find,
+                caseSensitive: opts.caseSensitive,
+                wholeWord: opts.wholeWord,
+                regex: opts.regex
+            ).map(\.range)
+            guard let first = results.first else { NSSound.beep(); return }
+            if req.replaceOne {
+                let at = textView.selectedRange()
+                let target = results.first(where: { NSEqualRanges($0, at) })
+                    ?? results.first(where: { $0.location >= at.location })
+                    ?? first
+                textView.setSelectedRange(target)
+                replaceEditorText(in: target, with: req.replace)
+                // Advance to next after replace.
+                let nextRanges = (try? store.findAll(
+                    in: textView.string,
+                    pattern: req.find,
+                    caseSensitive: opts.caseSensitive,
+                    wholeWord: opts.wholeWord,
+                    regex: opts.regex
+                ).map(\.range)) ?? []
+                if let next = nextRanges.first(where: { $0.location >= textView.selectedRange().location }) ?? nextRanges.first {
+                    textView.setSelectedRange(next)
+                    textView.scrollRangeToVisible(next)
+                }
+                return
+            }
+            let at = textView.selectedRange().location
+            let next = results.first(where: { $0.location >= at + (req.findNext ? 1 : 0) }) ?? first
+            textView.setSelectedRange(next)
+            textView.scrollRangeToVisible(next)
+        } catch {
+            NSSound.beep()
+            statusLabel.stringValue = error.localizedDescription
         }
-        guard !results.isEmpty else { NSSound.beep(); return }
-        let at = textView.selectedRange().location
-        let next = results.first(where: { $0.location >= at + (req.findNext ? 1 : 0) }) ?? results[0]
-        textView.setSelectedRange(next)
-        textView.scrollRangeToVisible(next)
     }
 
     private func stepFind(forward: Bool) {
@@ -774,48 +856,26 @@ final class MainWindowController: NSWindowController {
             NSSound.beep()
             return
         }
-        let ranges = matchRanges(in: textView.string, find: findPanel.findText, options: findPanel.options)
-        guard let first = ranges.first, let last = ranges.last else { NSSound.beep(); return }
-        let at = textView.selectedRange().location
-        let pick = forward
-            ? (ranges.first(where: { $0.location > at }) ?? first)
-            : (ranges.last(where: { $0.location < at }) ?? last)
-        textView.setSelectedRange(pick)
-        textView.scrollRangeToVisible(pick)
-    }
-
-    private func matchRanges(in text: String, find: String, options: FindPanel.Options) -> [NSRange] {
-        guard !find.isEmpty else { return [] }
-        if options.regex {
-            guard let re = Self.regex(for: find, options: options) else { return [] }
-            return re.matches(in: text, range: NSRange(location: 0, length: (text as NSString).length)).map(\.range)
+        let opts = findPanel.options
+        do {
+            let ranges = try store.findAll(
+                in: textView.string,
+                pattern: findPanel.findText,
+                caseSensitive: opts.caseSensitive,
+                wholeWord: opts.wholeWord,
+                regex: opts.regex
+            ).map(\.range)
+            guard let first = ranges.first, let last = ranges.last else { NSSound.beep(); return }
+            let at = textView.selectedRange().location
+            let pick = forward
+                ? (ranges.first(where: { $0.location > at }) ?? first)
+                : (ranges.last(where: { $0.location < at }) ?? last)
+            textView.setSelectedRange(pick)
+            textView.scrollRangeToVisible(pick)
+        } catch {
+            NSSound.beep()
+            statusLabel.stringValue = error.localizedDescription
         }
-        return literalRanges(in: text, needle: find, caseSensitive: options.caseSensitive, wholeWord: options.wholeWord)
-    }
-
-    private static func regex(for find: String, options: FindPanel.Options) -> NSRegularExpression? {
-        let pattern = options.wholeWord ? "\\b(?:\(find))\\b" : find
-        return try? NSRegularExpression(pattern: pattern, options: options.caseSensitive ? [] : .caseInsensitive)
-    }
-
-    private func literalRanges(in text: String, needle: String, caseSensitive: Bool, wholeWord: Bool) -> [NSRange] {
-        guard !needle.isEmpty else { return [] }
-        var out: [NSRange] = []
-        var from = text.startIndex
-        let opts: String.CompareOptions = caseSensitive ? [] : .caseInsensitive
-        let isWordChar: (Character) -> Bool = { $0.isLetter || $0.isNumber || $0 == "_" }
-        while let r = text.range(of: needle, options: opts, range: from..<text.endIndex) {
-            if wholeWord {
-                let leftOK = r.lowerBound == text.startIndex || !isWordChar(text[text.index(before: r.lowerBound)])
-                let rightOK = r.upperBound == text.endIndex || !isWordChar(text[r.upperBound])
-                if leftOK, rightOK { out.append(NSRange(r, in: text)) }
-            } else {
-                out.append(NSRange(r, in: text))
-            }
-            from = r.upperBound
-            if from == text.endIndex { break }
-        }
-        return out
     }
 
     private func presentFindResults(_ hits: [FindPanel.Hit]) {

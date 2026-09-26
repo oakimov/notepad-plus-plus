@@ -138,6 +138,18 @@ final class DocumentStore {
         engine.color(forScope: scope, language: language)
     }
 
+    func findAll(in text: String, pattern: String, caseSensitive: Bool, wholeWord: Bool, regex: Bool) throws -> [NppEngine.Match] {
+        try engine.findAll(in: text, pattern: pattern, caseSensitive: caseSensitive, wholeWord: wholeWord, regex: regex)
+    }
+
+    func findCount(in text: String, pattern: String, caseSensitive: Bool, wholeWord: Bool, regex: Bool) throws -> Int {
+        try engine.findCount(in: text, pattern: pattern, caseSensitive: caseSensitive, wholeWord: wholeWord, regex: regex)
+    }
+
+    func replaceAll(in text: String, pattern: String, replacement: String, caseSensitive: Bool, wholeWord: Bool, regex: Bool) throws -> (String, Int) {
+        try engine.replaceAll(in: text, pattern: pattern, replacement: replacement, caseSensitive: caseSensitive, wholeWord: wholeWord, regex: regex)
+    }
+
     func updateSelected(text: String) {
         let i = selectedIndex
         guard i >= 0 else { return }
