@@ -38,10 +38,15 @@ Find-in-Files filters; Preferences/`config.xml` binding.
 Preferences window bound to real settings, backup on save,
 external-change reload.
 
-## Phase 5 — View panels + File extras
+## Done — Phase 5 (partial): File extras
 
-Document list, Function List, Folder as Workspace, Close Multiple, Open
-Containing Folder, Rename/Delete/Save Copy As.
+- Close All but Current, Open Containing Folder, Copy File Path
+- Rename…, Delete from Disk (Trash)
+- Document switcher jump buttons 1–9
+
+## Phase 5 — remaining
+
+Function List, Folder as Workspace / file browser sidebar.
 
 ## Phase 6 — Plugins host + menus shell
 
