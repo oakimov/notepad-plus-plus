@@ -63,11 +63,15 @@ final class PluginRuntime: NSObject {
         // Layout must match C `FuncItemUTF8` (verified: sizeof=88, pFunc@64).
         assert(MemoryLayout<FuncItemUTF8Layout>.stride == 88)
 
-        // ARM64: NppData (3× uint64) is passed in x0–x2 — same as three UInt64 args.
+        // ARM64 AAPCS: aggregates >16 bytes are passed by hidden pointer (x0 = &NppData),
+        // not as three register args. Passing (1,2,3) made setInfo dereference 0x1 (crash).
         if let sym = dlsym(handle, "setInfo") {
-            typealias SetInfoFn = @convention(c) (UInt64, UInt64, UInt64) -> Void
+            typealias SetInfoFn = @convention(c) (UnsafeRawPointer) -> Void
             let fn = unsafeBitCast(sym, to: SetInfoFn.self)
-            fn(nppHandle, editorMain, editorSecond)
+            var data = NppDataC(npp: nppHandle, main: editorMain, second: editorSecond)
+            withUnsafeBytes(of: &data) { raw in
+                fn(raw.baseAddress!)
+            }
         }
 
         let display = readName(handle: handle) ?? url.deletingPathExtension().lastPathComponent
@@ -114,6 +118,13 @@ final class PluginRuntime: NSObject {
         }
         return nil
     }
+}
+
+/// Binary layout matching C `NppData` (3× `uint64_t`, 24 bytes — passed by pointer on ARM64).
+struct NppDataC {
+    var npp: UInt64
+    var main: UInt64
+    var second: UInt64
 }
 
 /// Binary layout matching `FuncItemUTF8` on arm64 macOS (88 bytes).

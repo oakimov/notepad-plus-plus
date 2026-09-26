@@ -50,7 +50,7 @@ Then **Plugins → Refresh Plugin List** — you should see **Hello NppMac → S
 |---|---|
 | Discover flat + nested `<Name>/<Name>.dylib` | Done |
 | `dlopen` + keep handle | Done |
-| `setInfo(NppData)` | Done (opaque tokens) |
+| `setInfo(NppData)` | Done (opaque tokens; ARM64 passes struct by hidden pointer) |
 | `getNameUTF8` / `getFuncsArrayUTF8` → Plugins submenu | Done |
 | Invoke `PFUNCPLUGINCMD` from menu | Done |
 | `beNotified` edit events | Not yet |
