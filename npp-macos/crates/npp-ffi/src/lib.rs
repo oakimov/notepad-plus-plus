@@ -55,6 +55,8 @@ pub struct Engine {
     style_colors: BTreeMap<String, BTreeMap<Scope, String>>,
     /// Global fallback scope colors from the first styler entries seen.
     global_colors: BTreeMap<Scope, String>,
+    /// UDL key → display name.
+    udl_display: BTreeMap<String, String>,
 }
 
 impl Engine {
@@ -69,6 +71,7 @@ impl Engine {
             ext_map: BTreeMap::new(),
             style_colors: BTreeMap::new(),
             global_colors: BTreeMap::new(),
+            udl_display: BTreeMap::new(),
         };
         eng.load_langs(langs_model);
         eng.load_stylers(langs_model);
@@ -137,6 +140,66 @@ impl Engine {
         if self.lang_names.is_empty() {
             self.lang_names.push("normal".into());
         }
+    }
+
+    /// Register UDL keyword languages (load-only). Returns registered keys.
+    fn register_udl(&mut self, defs: &[npp_config::UdlDef]) -> Vec<String> {
+        let mut keys = Vec::new();
+        for u in defs {
+            let groups = groups_from_keywords(&u.keywords);
+            self.lang_hl.insert(
+                u.key.clone(),
+                LangHighlight {
+                    comment_line: u.comment_line.clone(),
+                    comment_start: String::new(),
+                    comment_end: String::new(),
+                    groups,
+                },
+            );
+            // Extension map entries.
+            for ext in u.ext.split_whitespace() {
+                let e = ext.trim_start_matches('.').to_ascii_lowercase();
+                if !e.is_empty() {
+                    self.ext_map.insert(e, u.key.clone());
+                }
+            }
+            if !self.lang_names.iter().any(|n| n == &u.key) {
+                self.lang_names.push(u.key.clone());
+            }
+            self.udl_display.insert(u.key.clone(), u.name.clone());
+            keys.push(u.key.clone());
+        }
+        self.lang_names.sort_by(|a, b| {
+            if a == "normal" {
+                return std::cmp::Ordering::Less;
+            }
+            if b == "normal" {
+                return std::cmp::Ordering::Greater;
+            }
+            // Compare via static display / slug; udl_display already filled for new keys.
+            let da = if a.starts_with("udl_") {
+                a.trim_start_matches("udl_").replace('_', " ")
+            } else {
+                display_name(a).to_string()
+            };
+            let db = if b.starts_with("udl_") {
+                b.trim_start_matches("udl_").replace('_', " ")
+            } else {
+                display_name(b).to_string()
+            };
+            da.cmp(&db)
+        });
+        keys
+    }
+
+    fn display_for(&self, key: &str) -> String {
+        if let Some(d) = self.udl_display.get(key) {
+            return d.clone();
+        }
+        if key.starts_with("udl_") {
+            return key.trim_start_matches("udl_").replace('_', " ");
+        }
+        display_name(key).to_string()
     }
 
     fn load_stylers(&mut self, langs_model: Option<&Path>) {
@@ -808,7 +871,7 @@ pub unsafe extern "C" fn npp_lang_display_name(engine: *const Engine, index: i32
     }
     eng.lang_names
         .get(index as usize)
-        .map(|s| to_cstring(display_name(s)))
+        .map(|s| to_cstring(&eng.display_for(s)))
         .unwrap_or(ptr::null_mut())
 }
 
@@ -818,7 +881,42 @@ pub unsafe extern "C" fn npp_lang_display_name_for(lang: *const c_char) -> *mut 
     let Some(lang) = cstr_to_str(lang) else {
         return to_cstring("Normal text");
     };
+    if lang.starts_with("udl_") {
+        return to_cstring(&lang.trim_start_matches("udl_").replace('_', " "));
+    }
     to_cstring(display_name(lang))
+}
+
+/// Load a `.udl.xml` file into the engine (keyword highlighting only).
+/// Returns number of UserLang entries registered, or -1 on error (optional err_out).
+#[no_mangle]
+pub unsafe extern "C" fn npp_udl_load(
+    engine: *mut Engine,
+    path: *const c_char,
+    err_out: *mut *mut c_char,
+) -> i32 {
+    if !err_out.is_null() {
+        *err_out = ptr::null_mut();
+    }
+    let Some(eng) = eng_mut(engine) else {
+        return -1;
+    };
+    let Some(path) = cstr_to_str(path) else {
+        return -1;
+    };
+    match npp_config::parse_udl(Path::new(path)) {
+        Ok(defs) => {
+            let n = defs.len() as i32;
+            eng.register_udl(&defs);
+            n
+        }
+        Err(e) => {
+            if !err_out.is_null() {
+                *err_out = to_cstring(&e);
+            }
+            -1
+        }
+    }
 }
 
 /// RGB hex (`RRGGBB`) foreground for `scope` under `lang` (caller frees).

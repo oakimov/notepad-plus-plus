@@ -45,6 +45,12 @@ Phased Notepad++ macOS parity on NSTextView + Rust FFI.
 - Plugins menu: discover `.dylib`/`.bundle` under Application Support, open folder
 - Window menu shell
 
+## Done — Phase 7 (partial): Print + UDL load-only
+
+- File → Print…
+- Language → Load UDL… (keyword highlighting from `.udl.xml`)
+- `parse_udl` / `npp_udl_load` FFI
+
 ## Phase 4 — remaining
 
 `config.xml` / deeper stylers Preferences.
@@ -53,7 +59,7 @@ Phased Notepad++ macOS parity on NSTextView + Rust FFI.
 
 Full Notepad++ plugin ABI / dylib load + invoke.
 
-## Phase 7 — Stretch
+## Phase 7 — remaining
 
-UDL load-only, Style Configurator, Document Map, multi-caret/column (best-effort),
-Print, nativeLang, Dark Mode themes, Clipboard History / Character panel.
+Style Configurator, Document Map, multi-caret/column (best-effort),
+nativeLang, Dark Mode themes, Clipboard History / Character panel.

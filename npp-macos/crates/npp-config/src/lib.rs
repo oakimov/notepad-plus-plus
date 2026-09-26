@@ -161,6 +161,137 @@ pub fn parse_langs_model(path: &Path) -> Result<Vec<LanguageDef>, String> {
     Ok(langs)
 }
 
+/// One User-Defined Language from a `.udl.xml` file (load-only subset).
+#[derive(Debug, Clone, Default)]
+pub struct UdlDef {
+    /// Display name from `UserLang/@name`.
+    pub name: String,
+    /// Stable engine key (`udl_<slug>`).
+    pub key: String,
+    /// Space-separated extensions.
+    pub ext: String,
+    /// Keyword class → words (mapped to stock `instreN`/`typeN` names).
+    pub keywords: BTreeMap<String, String>,
+    /// Line comment token if parsed from Comments list (best-effort).
+    pub comment_line: String,
+}
+
+fn udl_slug(name: &str) -> String {
+    let mut s = String::from("udl_");
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            s.push(c.to_ascii_lowercase());
+        } else if c == ' ' || c == '-' || c == '_' {
+            if !s.ends_with('_') {
+                s.push('_');
+            }
+        }
+    }
+    while s.ends_with('_') {
+        s.pop();
+    }
+    if s == "udl" {
+        s.push_str("_lang");
+    }
+    s
+}
+
+/// Map UDL KeywordLists names onto stock keyword class keys used by highlighting.
+fn map_udl_keyword_class(name: &str) -> Option<&'static str> {
+    match name {
+        "Keywords1" => Some("instre1"),
+        "Keywords2" => Some("type1"),
+        "Keywords3" => Some("instre2"),
+        "Keywords4" => Some("type2"),
+        "Keywords5" => Some("instre3"),
+        "Keywords6" => Some("type3"),
+        "Keywords7" => Some("instre4"),
+        "Keywords8" => Some("type4"),
+        _ => None,
+    }
+}
+
+/// Parse a Notepad++ `.udl.xml` / `userDefineLang.xml` for keyword highlighting.
+pub fn parse_udl(path: &Path) -> Result<Vec<UdlDef>, String> {
+    use quick_xml::events::Event;
+    use quick_xml::reader::Reader;
+
+    let xml = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut r = Reader::from_str(&xml);
+    r.config_mut().trim_text(true);
+    let mut out = Vec::new();
+    let mut cur: Option<UdlDef> = None;
+    let mut buf = Vec::new();
+    loop {
+        match r.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == b"UserLang" => {
+                let mut name = String::new();
+                let mut ext = String::new();
+                for a in e.attributes().flatten() {
+                    match a.key.as_ref() {
+                        b"name" => name = attr(&a),
+                        b"ext" => ext = attr(&a),
+                        _ => {}
+                    }
+                }
+                if !name.is_empty() {
+                    cur = Some(UdlDef {
+                        key: udl_slug(&name),
+                        name,
+                        ext,
+                        keywords: BTreeMap::new(),
+                        comment_line: String::new(),
+                    });
+                }
+            }
+            Ok(Event::Start(e)) if e.name().as_ref() == b"Keywords" => {
+                let mut kw_name = String::new();
+                for a in e.attributes().flatten() {
+                    if a.key.as_ref() == b"name" {
+                        kw_name = attr(&a);
+                    }
+                }
+                let mut text = String::new();
+                loop {
+                    match r.read_event_into(&mut buf) {
+                        Ok(Event::Text(t)) => {
+                            text.push_str(&t.xml10_content().unwrap_or_default());
+                        }
+                        Ok(Event::End(_)) | Ok(Event::Eof) => break,
+                        Err(e) => return Err(e.to_string()),
+                        _ => {}
+                    }
+                    buf.clear();
+                }
+                if let Some(u) = cur.as_mut() {
+                    if kw_name == "Comments" {
+                        // UDL Comments: `00# 01… 02((EOL)) …` — first token after 00 is line comment.
+                        if let Some(tok) = text.split_whitespace().find_map(|t| {
+                            t.strip_prefix("00").filter(|s| !s.is_empty())
+                        }) {
+                            u.comment_line = tok.to_string();
+                        }
+                    } else if let Some(mapped) = map_udl_keyword_class(&kw_name) {
+                        if !text.trim().is_empty() {
+                            u.keywords.insert(mapped.to_string(), text);
+                        }
+                    }
+                }
+            }
+            Ok(Event::End(e)) if e.name().as_ref() == b"UserLang" => {
+                if let Some(u) = cur.take() {
+                    out.push(u);
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(e.to_string()),
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(out)
+}
+
 fn attr(a: &quick_xml::events::attributes::Attribute) -> String {
     let raw = String::from_utf8_lossy(a.value.as_ref()).into_owned();
     quick_xml::escape::unescape(&raw)
@@ -429,6 +560,26 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].filename, "/a.txt");
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn parses_markdown_udl() {
+        let p = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("..")
+            .join("PowerEditor")
+            .join("bin")
+            .join("userDefineLangs")
+            .join("markdown._preinstalled.udl.xml");
+        if !p.exists() {
+            return;
+        }
+        let langs = parse_udl(&p).unwrap();
+        assert!(!langs.is_empty());
+        assert!(langs[0].name.contains("Markdown"));
+        assert!(langs[0].key.starts_with("udl_"));
+        assert!(!langs[0].keywords.is_empty());
     }
 
     #[test]

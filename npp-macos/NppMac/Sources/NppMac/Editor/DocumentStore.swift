@@ -141,6 +141,11 @@ final class DocumentStore {
         engine.languages()
     }
 
+    @discardableResult
+    func loadUDL(path: String) throws -> Int {
+        try engine.loadUDL(path: path)
+    }
+
     func language(forPath path: String) -> String {
         engine.language(forPath: path)
     }

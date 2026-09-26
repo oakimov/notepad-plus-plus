@@ -96,6 +96,20 @@ final class NppEngine {
         }
     }
 
+    /// Load a Notepad++ `.udl.xml` (keyword highlighting only). Returns registered count.
+    @discardableResult
+    func loadUDL(path: String) throws -> Int {
+        var err: UnsafeMutablePointer<CChar>?
+        let n = path.withCString { npp_udl_load(ptr, $0, &err) }
+        if let err {
+            throw NSError(domain: "NppEngine", code: 3, userInfo: [NSLocalizedDescriptionKey: Self.takeString(err)])
+        }
+        guard n >= 0 else {
+            throw NSError(domain: "NppEngine", code: 3, userInfo: [NSLocalizedDescriptionKey: "UDL load failed"])
+        }
+        return Int(n)
+    }
+
     func isDirty(at index: Int) -> Bool {
         npp_doc_is_dirty(ptr, Int32(index))
     }

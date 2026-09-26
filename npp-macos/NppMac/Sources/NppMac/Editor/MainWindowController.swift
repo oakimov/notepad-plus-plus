@@ -1,5 +1,6 @@
 import AppKit
 import CryptoKit
+import UniformTypeIdentifiers
 
 /// Main window: internal tab bar + editor view + status bar + find panel.
 final class MainWindowController: NSWindowController {
@@ -648,6 +649,18 @@ final class MainWindowController: NSWindowController {
         } catch {
             presentError(error)
         }
+    }
+
+    @objc func filePrint(_ sender: Any?) {
+        let info = NSPrintInfo.shared.copy() as! NSPrintInfo
+        info.horizontalPagination = .fit
+        info.verticalPagination = .automatic
+        info.isHorizontallyCentered = false
+        info.isVerticallyCentered = false
+        let op = NSPrintOperation(view: textView, printInfo: info)
+        op.showsPrintPanel = true
+        op.showsProgressPanel = true
+        op.run()
     }
 
     private func saveDocument(at index: Int, done: @escaping (Bool) -> Void) {
@@ -1431,6 +1444,36 @@ final class MainWindowController: NSWindowController {
         }
         store.setLanguage(lang)
         refresh()
+    }
+
+    @objc func langLoadUDL(_ sender: Any?) {
+        guard let window, window.attachedSheet == nil else { return }
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.xml]
+        panel.message = "Choose Notepad++ User Defined Language (.udl.xml) files"
+        panel.beginSheetModal(for: window) { [weak self] result in
+            guard let self, result == .OK else { return }
+            var loaded = 0
+            var lastKey: String?
+            for url in panel.urls {
+                do {
+                    let n = try self.store.loadUDL(path: url.path)
+                    loaded += n
+                    if let key = self.store.languages().last(where: { $0.key.hasPrefix("udl_") })?.key {
+                        lastKey = key
+                    }
+                } catch {
+                    self.presentError(error)
+                }
+            }
+            if let lastKey {
+                self.syncEditorToStore()
+                self.store.setLanguage(lastKey)
+            }
+            self.refresh()
+            self.statusLabel.stringValue = "Loaded \(loaded) UDL language(s)"
+        }
     }
 
     @objc func helpAbout(_ sender: Any?) {

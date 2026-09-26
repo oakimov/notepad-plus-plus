@@ -161,6 +161,8 @@ enum MenuBuilder {
         item(m, "Copy File Path", #selector(MainWindowController.fileCopyPath(_:)), "")
         item(m, "Rename…", #selector(MainWindowController.fileRename(_:)), "")
         item(m, "Delete from Disk", #selector(MainWindowController.fileDelete(_:)), "")
+        m.addItem(.separator())
+        item(m, "Print…", #selector(MainWindowController.filePrint(_:)), "p")
     }
 
     private static weak var recentMenu: NSMenu?
@@ -357,6 +359,7 @@ enum MenuBuilder {
         }
 
         m.addItem(.separator())
+        item(m, "Load UDL…", #selector(MainWindowController.langLoadUDL(_:)), "")
         item(m, "Auto-detect by Extension", #selector(MainWindowController.langAuto(_:)), "")
     }
 }

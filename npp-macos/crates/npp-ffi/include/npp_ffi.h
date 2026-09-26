@@ -100,6 +100,10 @@ char *npp_lang_name(const NppEngine *engine, int32_t index);
 char *npp_lang_display_name(const NppEngine *engine, int32_t index);
 char *npp_lang_display_name_for(const char *lang);
 
+/// Load a User-Defined Language `.udl.xml` (keyword highlight only).
+/// Returns count of languages registered, or -1 on error.
+int32_t npp_udl_load(NppEngine *engine, const char *path, char **err_out);
+
 /// Guess language from path extension (static fallback map).
 char *npp_language_for_path(const char *path);
 /// Guess language using the engine's XML-backed extension map.
