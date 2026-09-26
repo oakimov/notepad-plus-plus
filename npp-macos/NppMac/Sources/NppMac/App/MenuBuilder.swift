@@ -114,6 +114,17 @@ enum MenuBuilder {
         m.addItem(.separator())
         item(m, "Close Tab", #selector(MainWindowController.fileClose(_:)), "w")
         item(m, "Close All Tabs", #selector(MainWindowController.fileCloseAll(_:)), "W")
+        let closeOthers = m.addItem(
+            withTitle: "Close All but Current",
+            action: #selector(MainWindowController.fileCloseOthers(_:)),
+            keyEquivalent: ""
+        )
+        closeOthers.target = nil
+        m.addItem(.separator())
+        item(m, "Open Containing Folder", #selector(MainWindowController.fileOpenContainingFolder(_:)), "")
+        item(m, "Copy File Path", #selector(MainWindowController.fileCopyPath(_:)), "")
+        item(m, "Rename…", #selector(MainWindowController.fileRename(_:)), "")
+        item(m, "Delete from Disk", #selector(MainWindowController.fileDelete(_:)), "")
     }
 
     private static weak var recentMenu: NSMenu?

@@ -526,6 +526,79 @@ final class MainWindowController: NSWindowController {
         closeTabs(remaining: store.count)
     }
 
+    @objc func fileCloseOthers(_ sender: Any?) {
+        syncEditorToStore()
+        let keep = store.selectedIndex
+        // Close from the end so indices stay valid.
+        for i in stride(from: store.count - 1, through: 0, by: -1) where i != keep {
+            closeTab(at: i)
+        }
+    }
+
+    @objc func fileOpenContainingFolder(_ sender: Any?) {
+        guard let url = store.selectedMeta()?.fileURL else { NSSound.beep(); return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    @objc func fileCopyPath(_ sender: Any?) {
+        guard let path = store.selectedMeta()?.fileURL?.path else { NSSound.beep(); return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(path, forType: .string)
+    }
+
+    @objc func fileRename(_ sender: Any?) {
+        syncEditorToStore()
+        let index = store.selectedIndex
+        guard (0..<store.count).contains(index),
+              let url = store.tabs[index].fileURL
+        else { NSSound.beep(); return }
+        let alert = NSAlert()
+        alert.messageText = "Rename"
+        alert.informativeText = "New file name:"
+        let field = NSTextField(string: url.lastPathComponent)
+        field.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let newName = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !newName.isEmpty, newName != url.lastPathComponent else { return }
+        let dest = url.deletingLastPathComponent().appendingPathComponent(newName)
+        do {
+            try FileManager.default.moveItem(at: url, to: dest)
+            try store.save(at: index, to: dest)
+            SessionStore.pushRecent(dest.path)
+            persistSession()
+            MenuBuilder.reloadRecentFiles(target: self)
+            refresh()
+        } catch {
+            presentError(error)
+        }
+    }
+
+    @objc func fileDelete(_ sender: Any?) {
+        syncEditorToStore()
+        let index = store.selectedIndex
+        guard (0..<store.count).contains(index),
+              let url = store.tabs[index].fileURL
+        else { NSSound.beep(); return }
+        let alert = NSAlert()
+        alert.messageText = "Delete “\(url.lastPathComponent)”?"
+        alert.informativeText = "The file will be moved to the Trash."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Move to Trash")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+            store.close(at: index)
+            persistSession()
+            refresh()
+        } catch {
+            presentError(error)
+        }
+    }
+
     private func saveDocument(at index: Int, done: @escaping (Bool) -> Void) {
         guard (0..<store.count).contains(index) else { done(false); return }
         guard store.tabs[index].fileURL != nil else {
@@ -896,7 +969,20 @@ final class MainWindowController: NSWindowController {
         let names = store.tabs.enumerated().map { "\($0.offset + 1). \($0.element.title)" }.joined(separator: "\n")
         alert.informativeText = names.isEmpty ? "(none)" : names
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        // Quick-select via numbered buttons for small sets.
+        let count = min(store.count, 9)
+        for i in 0..<count {
+            alert.addButton(withTitle: "\(i + 1)")
+        }
+        let response = alert.runModal()
+        if response.rawValue >= NSApplication.ModalResponse.alertSecondButtonReturn.rawValue {
+            let idx = response.rawValue - NSApplication.ModalResponse.alertSecondButtonReturn.rawValue
+            if idx < store.count {
+                syncEditorToStore()
+                store.select(at: idx)
+                refresh()
+            }
+        }
     }
 
     @objc func viewToggleStatusBar(_ sender: Any?) {
