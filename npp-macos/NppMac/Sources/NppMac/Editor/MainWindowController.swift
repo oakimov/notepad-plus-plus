@@ -11,10 +11,16 @@ final class MainWindowController: NSWindowController {
     private var findPanel: FindPanel?
     private var folderPanel: FolderBrowserPanel?
     private var functionListPanel: FunctionListPanel?
+    private var documentMapPanel: DocumentMapPanel?
+    private var clipboardPanel: ClipboardHistoryPanel?
+    private var clipboardWindow: NSPanel?
     private var folderWidth: NSLayoutConstraint?
     private var functionWidth: NSLayoutConstraint?
+    private var docMapWidth: NSLayoutConstraint?
     private var folderVisible = false
     private var functionListVisible = false
+    private var documentMapVisible = false
+    private var clipboardVisible = false
     private var diskWatchTimer: Timer?
     private var knownMtimes: [String: Date] = [:]
     private var macroRecording = false
@@ -163,11 +169,16 @@ final class MainWindowController: NSWindowController {
         functions.isHidden = true
         functionListPanel = functions
 
+        let docMap = DocumentMapPanel()
+        docMap.onJumpFraction = { [weak self] frac in self?.jumpToFraction(frac) }
+        docMap.isHidden = true
+        documentMapPanel = docMap
+
         statusLabel.font = NSFont.systemFont(ofSize: 11)
         statusLabel.lineBreakMode = .byTruncatingMiddle
         statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        for view in [tabs, folder, scroll, functions, find, statusLabel] as [NSView] {
+        for view in [tabs, folder, scroll, docMap, functions, find, statusLabel] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(view)
         }
@@ -176,11 +187,13 @@ final class MainWindowController: NSWindowController {
         let statusH = statusLabel.heightAnchor.constraint(equalToConstant: 0)
         let folderW = folder.widthAnchor.constraint(equalToConstant: 0)
         let functionW = functions.widthAnchor.constraint(equalToConstant: 0)
+        let mapW = docMap.widthAnchor.constraint(equalToConstant: 0)
         editorAboveFind = aboveFind
         editorAboveStatus = aboveStatus
         statusHeight = statusH
         folderWidth = folderW
         functionWidth = functionW
+        docMapWidth = mapW
         NSLayoutConstraint.activate([
             tabs.topAnchor.constraint(equalTo: root.topAnchor),
             tabs.leadingAnchor.constraint(equalTo: root.leadingAnchor),
@@ -196,14 +209,19 @@ final class MainWindowController: NSWindowController {
             functions.bottomAnchor.constraint(equalTo: statusLabel.topAnchor, constant: -2),
             functionW,
 
+            docMap.topAnchor.constraint(equalTo: tabs.bottomAnchor),
+            docMap.trailingAnchor.constraint(equalTo: functions.leadingAnchor),
+            docMap.bottomAnchor.constraint(equalTo: statusLabel.topAnchor, constant: -2),
+            mapW,
+
             scroll.topAnchor.constraint(equalTo: tabs.bottomAnchor),
             scroll.leadingAnchor.constraint(equalTo: folder.trailingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: functions.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: docMap.leadingAnchor),
             scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 80),
             aboveStatus,
 
             find.leadingAnchor.constraint(equalTo: folder.trailingAnchor),
-            find.trailingAnchor.constraint(equalTo: functions.leadingAnchor),
+            find.trailingAnchor.constraint(equalTo: docMap.leadingAnchor),
             find.bottomAnchor.constraint(equalTo: statusLabel.topAnchor, constant: -2),
 
             statusLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 6),
@@ -253,6 +271,7 @@ final class MainWindowController: NSWindowController {
         scheduleHighlight()
         refreshLineNumbers()
         refreshFunctionList()
+        refreshDocumentMap()
         recordKnownMtimes()
     }
 
@@ -303,6 +322,7 @@ final class MainWindowController: NSWindowController {
             }
             self.refreshLineNumbers()
             self.refreshFunctionList()
+            self.refreshDocumentMap()
         }
         syncWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
@@ -768,6 +788,22 @@ final class MainWindowController: NSWindowController {
         applyEditorText(text, caret: caret)
     }
 
+    @objc func editInsertDateTime(_ sender: Any?) {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .medium
+        let s = formatter.string(from: Date())
+        replaceEditorText(in: textView.selectedRange(), with: s)
+    }
+
+    @objc func editCharacterPanel(_ sender: Any?) {
+        CharacterPanelController.show { [weak self] ch in
+            guard let self else { return }
+            self.replaceEditorText(in: self.textView.selectedRange(), with: ch)
+            self.window?.makeFirstResponder(self.textView)
+        }
+    }
+
     @objc func editToggleComment(_ sender: Any?) {
         let token = commentToken(for: store.selectedMeta()?.language ?? "normal")
         guard !token.isEmpty else { return }
@@ -1138,6 +1174,85 @@ final class MainWindowController: NSWindowController {
         }
     }
 
+    @objc func viewToggleDocumentMap(_ sender: Any?) {
+        documentMapVisible.toggle()
+        documentMapPanel?.isHidden = !documentMapVisible
+        docMapWidth?.constant = documentMapVisible ? 120 : 0
+        if documentMapVisible {
+            refreshDocumentMap()
+        }
+    }
+
+    @objc func viewToggleClipboardHistory(_ sender: Any?) {
+        clipboardVisible.toggle()
+        if clipboardVisible {
+            showClipboardWindow()
+        } else {
+            clipboardWindow?.orderOut(nil)
+        }
+    }
+
+    private func showClipboardWindow() {
+        if clipboardWindow == nil {
+            let panel = ClipboardHistoryPanel()
+            panel.onPaste = { [weak self] text in
+                guard let self else { return }
+                let range = self.textView.selectedRange()
+                self.replaceEditorText(in: range, with: text)
+                self.window?.makeFirstResponder(self.textView)
+            }
+            panel.start()
+            clipboardPanel = panel
+            let win = NSPanel(
+                contentRect: NSRect(x: 0, y: 0, width: 280, height: 360),
+                styleMask: [.titled, .closable, .resizable, .utilityWindow],
+                backing: .buffered,
+                defer: false
+            )
+            win.title = "Clipboard History"
+            win.isFloatingPanel = true
+            win.level = .floating
+            win.contentView = panel
+            win.isReleasedWhenClosed = false
+            win.delegate = self
+            clipboardWindow = win
+        }
+        if let main = window {
+            let frame = main.frame
+            clipboardWindow?.setFrameOrigin(NSPoint(x: frame.maxX - 300, y: frame.midY - 180))
+        }
+        clipboardWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    private func refreshDocumentMap() {
+        guard documentMapVisible else { return }
+        let text = textView.string
+        // Cap map content for very large files.
+        if text.utf8.count > 400_000 {
+            documentMapPanel?.setText(String(text.prefix(200_000)) + "\n…")
+        } else {
+            documentMapPanel?.setText(text)
+        }
+        updateDocumentMapScroll()
+    }
+
+    private func updateDocumentMapScroll() {
+        guard documentMapVisible, let scroll = editorScroll else { return }
+        let docH = scroll.documentView?.bounds.height ?? 1
+        let y = scroll.contentView.bounds.origin.y
+        let frac = docH > 0 ? y / docH : 0
+        documentMapPanel?.mirrorVisibleFraction(frac)
+    }
+
+    private func jumpToFraction(_ fraction: CGFloat) {
+        guard let scroll = editorScroll, let doc = scroll.documentView else { return }
+        let h = doc.bounds.height - scroll.contentView.bounds.height
+        let y = max(0, min(h, fraction * max(doc.bounds.height, 1)))
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        window?.makeFirstResponder(textView)
+    }
+
     private func refreshFunctionList() {
         guard functionListVisible else { return }
         let lang = store.selectedMeta()?.language ?? "normal"
@@ -1321,6 +1436,7 @@ final class MainWindowController: NSWindowController {
 
     @objc func editorBoundsDidChange(_ note: Notification) {
         refreshLineNumbers()
+        updateDocumentMapScroll()
     }
 
     private func refreshLineNumbers() {
@@ -1605,6 +1721,10 @@ extension MainWindowController: NSMenuItemValidation {
             menuItem.state = folderVisible ? .on : .off
         } else if menuItem.action == #selector(viewToggleFunctionList(_:)) {
             menuItem.state = functionListVisible ? .on : .off
+        } else if menuItem.action == #selector(viewToggleDocumentMap(_:)) {
+            menuItem.state = documentMapVisible ? .on : .off
+        } else if menuItem.action == #selector(viewToggleClipboardHistory(_:)) {
+            menuItem.state = clipboardVisible ? .on : .off
         } else if menuItem.action == #selector(macroStartRecording(_:)) {
             return !macroRecording
         } else if menuItem.action == #selector(macroStopRecording(_:)) {
@@ -1638,6 +1758,10 @@ extension MainWindowController: NSMenuItemValidation {
 
 extension MainWindowController: NSWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if sender === clipboardWindow {
+            clipboardVisible = false
+            return true
+        }
         guard hasUnsavedDocuments else { return true }
         confirmCloseAll { proceed in
             if proceed { sender.close() }

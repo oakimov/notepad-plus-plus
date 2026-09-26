@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingFiles: [String] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        SessionStore.loadConfig()
         applyAppIcon()
         MenuBuilder.build()
         let controller = MainWindowController(documents: DocumentStore(engine: NppEngine(langsModel: Self.langsModelPath())))
@@ -101,6 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Prompt for every unsaved document before quitting (Cmd-Q / Dock Quit).
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         windowController?.persistSession()
+        SessionStore.saveConfig()
         guard let wc = windowController, wc.hasUnsavedDocuments else { return .terminateNow }
         wc.confirmCloseAll { proceed in
             if proceed { wc.persistSession() }

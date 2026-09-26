@@ -99,6 +99,7 @@ final class PreferencesWindow: NSWindowController {
             AppPrefs.tabWidth = n
         }
         NotificationCenter.default.post(name: .nppPrefsDidChange, object: nil)
+        SessionStore.saveConfig()
         window?.close()
     }
 
