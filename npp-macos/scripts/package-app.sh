@@ -78,5 +78,16 @@ for t in Monokai.xml Zenburn.xml Solarized.xml Solarized-light.xml Twilight.xml 
   fi
 done
 
+# Bundle a few UI language files (others available from the repo at runtime in dev).
+NL_SRC="$ROOT/../PowerEditor/installer/nativeLang"
+NL_DST="$APP/Contents/Resources/nativeLang"
+mkdir -p "$NL_DST"
+for t in english.xml french.xml german.xml spanish.xml italian.xml japanese.xml \
+         chineseSimplified.xml russian.xml portuguese.xml dutch.xml; do
+  if [[ -f "$NL_SRC/$t" ]]; then
+    cp "$NL_SRC/$t" "$NL_DST/"
+  fi
+done
+
 echo "==> built $APP"
 echo "    open $APP"

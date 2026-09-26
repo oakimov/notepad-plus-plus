@@ -78,6 +78,19 @@ enum MenuBuilder {
         if let i = appear.items.last { i.representedObject = "dark" }
         let appearParent = settings.addItem(withTitle: "Appearance", action: nil, keyEquivalent: "")
         settings.setSubmenu(appear, for: appearParent)
+        settings.addItem(.separator())
+        let uiLang = NSMenu(title: "UI Language")
+        for lang in NativeLang.available() {
+            let i = uiLang.addItem(
+                withTitle: lang.name,
+                action: #selector(MainWindowController.uiLanguageSelect(_:)),
+                keyEquivalent: ""
+            )
+            i.representedObject = lang.file
+            i.target = nil
+        }
+        let uiParent = settings.addItem(withTitle: "UI Language", action: nil, keyEquivalent: "")
+        settings.setSubmenu(uiLang, for: uiParent)
         attach(mainMenu, title: "Settings", menu: settings)
 
         let tools = NSMenu(title: "Tools")
@@ -251,14 +264,44 @@ enum MenuBuilder {
             empty.isEnabled = false
         } else {
             for e in entries {
+                let title = e.loadable ? e.displayName : "\(e.displayName) (unloadable)"
                 let i = menu.addItem(
-                    withTitle: e.name,
+                    withTitle: title,
                     action: #selector(MainWindowController.pluginsInvoke(_:)),
                     keyEquivalent: ""
                 )
                 i.representedObject = e.url
                 i.toolTip = e.url.path
+                i.isEnabled = e.loadable
                 i.target = nil
+            }
+        }
+    }
+
+    /// Apply nativeLang top-level titles to the main menu.
+    static func applyNativeLangTitles() {
+        guard let main = NSApp.mainMenu else { return }
+        let map: [(String, String)] = [
+            ("File", "file"),
+            ("Edit", "edit"),
+            ("Search", "search"),
+            ("View", "view"),
+            ("Encoding", "encoding"),
+            ("Language", "language"),
+            ("Settings", "settings"),
+            ("Tools", "tools"),
+            ("Macro", "macro"),
+            ("Run", "run"),
+            ("Plugins", "Plugins"),
+            ("Window", "Window"),
+            ("Help", "help"),
+        ]
+        for item in main.items {
+            for (english, id) in map {
+                if item.title == english || item.submenu?.title == english {
+                    item.title = NativeLang.menuTitle(id: id, fallback: english)
+                    break
+                }
             }
         }
     }
@@ -292,6 +335,8 @@ enum MenuBuilder {
         m.addItem(.separator())
         item(m, "Insert Date/Time", #selector(MainWindowController.editInsertDateTime(_:)), "")
         item(m, "Character Panel…", #selector(MainWindowController.editCharacterPanel(_:)), "")
+        m.addItem(.separator())
+        item(m, "Column Mode", #selector(MainWindowController.editToggleColumnMode(_:)), "")
         m.addItem(.separator())
         item(m, "UPPERCASE", #selector(MainWindowController.editUpperCase(_:)), "U")
         item(m, "lowercase", #selector(MainWindowController.editLowerCase(_:)), "u")

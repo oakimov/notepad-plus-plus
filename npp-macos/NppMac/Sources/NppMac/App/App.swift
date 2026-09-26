@@ -23,8 +23,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         SessionStore.loadConfig()
         AppPrefs.applyAppearance()
+        NativeLang.loadCurrent()
         applyAppIcon()
         MenuBuilder.build()
+        MenuBuilder.applyNativeLangTitles()
         let controller = MainWindowController(documents: DocumentStore(engine: NppEngine(langsModel: Self.langsModelPath())))
         windowController = controller
         MenuBuilder.retarget(to: controller)

@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 /// Main window: internal tab bar + editor view + status bar + find panel.
 final class MainWindowController: NSWindowController {
     private let store: DocumentStore
-    private let textView: NSTextView
+    private let textView: EditorTextView
     private let statusLabel: NSTextField
     private var tabBar: TabBarView?
     private var findPanel: FindPanel?
@@ -21,6 +21,7 @@ final class MainWindowController: NSWindowController {
     private var functionListVisible = false
     private var documentMapVisible = false
     private var clipboardVisible = false
+    private var columnMode = false
     private var diskWatchTimer: Timer?
     private var knownMtimes: [String: Date] = [:]
     private var macroRecording = false
@@ -100,7 +101,7 @@ final class MainWindowController: NSWindowController {
         fatalError("init(coder:) is not supported")
     }
 
-    private static func makeTextView() -> NSTextView {
+    private static func makeTextView() -> EditorTextView {
         let storage = NSTextStorage()
         let layout = InvisibleCharsLayoutManager()
         storage.addLayoutManager(layout)
@@ -110,7 +111,7 @@ final class MainWindowController: NSWindowController {
         ))
         container.widthTracksTextView = false
         layout.addTextContainer(container)
-        let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: 1000, height: 600), textContainer: container)
+        let tv = EditorTextView(frame: NSRect(x: 0, y: 0, width: 1000, height: 600), textContainer: container)
         tv.minSize = NSSize(width: 0, height: 0)
         tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         tv.isVerticallyResizable = true
@@ -820,6 +821,14 @@ final class MainWindowController: NSWindowController {
         }
     }
 
+    @objc func editToggleColumnMode(_ sender: Any?) {
+        columnMode.toggle()
+        textView.columnModeEnabled = columnMode
+        statusLabel.stringValue = columnMode
+            ? "Column Mode ON — Option-drag or drag to select a rectangle"
+            : "Column Mode OFF"
+    }
+
     @objc func editToggleComment(_ sender: Any?) {
         let token = commentToken(for: store.selectedMeta()?.language ?? "normal")
         guard !token.isEmpty else { return }
@@ -1490,6 +1499,16 @@ final class MainWindowController: NSWindowController {
         SessionStore.saveConfig()
     }
 
+    @objc func uiLanguageSelect(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem,
+              let file = item.representedObject as? String
+        else { return }
+        NativeLang.load(file: file)
+        MenuBuilder.applyNativeLangTitles()
+        SessionStore.saveConfig()
+        statusLabel.stringValue = "UI language: \(item.title)"
+    }
+
     private func applyTabWidth(_ n: Int) {
         let font = editorFont
         let space = NSAttributedString(string: String(repeating: " ", count: max(n, 1)), attributes: [.font: font])
@@ -1770,9 +1789,21 @@ final class MainWindowController: NSWindowController {
 
     @objc func pluginsInvoke(_ sender: Any?) {
         guard let item = sender as? NSMenuItem, let url = item.representedObject as? URL else { return }
+        let entries = PluginHost.discover()
+        let entry = entries.first { $0.url == url }
         let alert = NSAlert()
-        alert.messageText = "Plugin host (stub)"
-        alert.informativeText = "Discovered \(url.lastPathComponent).\nFull Notepad++ plugin ABI loading is not yet implemented on macOS."
+        alert.messageText = entry?.displayName ?? url.lastPathComponent
+        if entry?.loadable == true {
+            alert.informativeText = """
+            Loaded \(url.path).
+
+            Notepad++ plugin ABI (`setInfo` / `getFuncsArray` / `beNotified`) is partially supported.
+            Export `getNameUTF8` for a friendly menu title. Full FuncItem dispatch is still evolving —
+            see docs/plugin-porting.md.
+            """
+        } else {
+            alert.informativeText = "Could not dlopen this plugin:\n\(url.path)"
+        }
         alert.runModal()
     }
 }
@@ -1821,12 +1852,17 @@ extension MainWindowController: NSMenuItemValidation {
             menuItem.state = lineNumbersVisible ? .on : .off
         } else if menuItem.action == #selector(viewToggleWhitespace(_:)) {
             menuItem.state = showWhitespace ? .on : .off
+        } else if menuItem.action == #selector(editToggleColumnMode(_:)) {
+            menuItem.state = columnMode ? .on : .off
         } else if menuItem.action == #selector(themeSelect(_:)) {
             let name = (menuItem.representedObject as? String) ?? ""
             menuItem.state = AppPrefs.themeName == name ? .on : .off
         } else if menuItem.action == #selector(appearanceSelect(_:)) {
             let mode = (menuItem.representedObject as? String) ?? "system"
             menuItem.state = AppPrefs.appearance == mode ? .on : .off
+        } else if menuItem.action == #selector(uiLanguageSelect(_:)) {
+            let file = (menuItem.representedObject as? String) ?? ""
+            menuItem.state = NativeLang.languageFile == file ? .on : .off
         } else if menuItem.action == #selector(viewToggleFolder(_:)) {
             menuItem.state = folderVisible ? .on : .off
         } else if menuItem.action == #selector(viewToggleFunctionList(_:)) {

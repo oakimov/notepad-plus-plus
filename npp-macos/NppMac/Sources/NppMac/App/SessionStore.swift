@@ -31,6 +31,7 @@ enum SessionStore {
                 <Appearance>\(xmlEscape(AppPrefs.appearance))</Appearance>
                 <ShowWhitespace>\(AppPrefs.showWhitespace ? 1 : 0)</ShowWhitespace>
                 <Theme>\(xmlEscape(AppPrefs.themeName))</Theme>
+                <NativeLang>\(xmlEscape(NativeLang.languageFile))</NativeLang>
             </GUIConfig>
         </NotepadPlus>
         """
@@ -51,6 +52,7 @@ enum SessionStore {
         if let s = stringTag("Appearance", in: text) { AppPrefs.appearance = s }
         if let v = intTag("ShowWhitespace", in: text) { AppPrefs.showWhitespace = v != 0 }
         if let s = stringTag("Theme", in: text) { AppPrefs.themeName = xmlUnescape(s) }
+        if let s = stringTag("NativeLang", in: text) { NativeLang.languageFile = xmlUnescape(s) }
     }
 
     private static func intTag(_ name: String, in text: String) -> Int? {
