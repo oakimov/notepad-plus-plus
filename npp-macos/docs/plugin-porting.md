@@ -20,6 +20,43 @@ same export names and `FuncItem`/`ShortcutKey` shapes, new header
 | `.dll` + `LoadLibrary` | `.dylib` in `~/Library/Application Support/NppMac/plugins/<Name>/<Name>.dylib`, loaded via `dlopen` |
 | `SendMessage(npp, NPPM_*, …)` with HWNDs | same message numbers (M4 subset first), handles are tokens |
 
+## Preferred macOS exports (UTF-8)
+
+`wchar_t` on Apple is 32-bit; Swift interop is awkward. Export these as well:
+
+| Symbol | Purpose |
+|---|---|
+| `getNameUTF8` | Plugin menu title (`const char *`) |
+| `getFuncsArrayUTF8` | `FuncItemUTF8[]` with `char _itemName[64]` |
+
+The host calls `setInfo`, then prefers UTF-8 helpers, then falls back to probing `getName` as ASCII C string.
+
+Sample: `examples/sample-plugin/hello_plugin.c`
+
+```bash
+cd examples/sample-plugin
+clang -shared -fPIC -o HelloNppMac.dylib hello_plugin.c \
+  -I ../../crates/npp-plugin/include
+mkdir -p ~/Library/Application\ Support/NppMac/plugins/HelloNppMac
+cp HelloNppMac.dylib \
+  ~/Library/Application\ Support/NppMac/plugins/HelloNppMac/HelloNppMac.dylib
+```
+
+Then **Plugins → Refresh Plugin List** — you should see **Hello NppMac → Say Hello**.
+
+## Host support today
+
+| Feature | Status |
+|---|---|
+| Discover flat + nested `<Name>/<Name>.dylib` | Done |
+| `dlopen` + keep handle | Done |
+| `setInfo(NppData)` | Done (opaque tokens) |
+| `getNameUTF8` / `getFuncsArrayUTF8` → Plugins submenu | Done |
+| Invoke `PFUNCPLUGINCMD` from menu | Done |
+| `beNotified` edit events | Not yet |
+| `messageProc` / `NPPM_*` dispatch | Not yet (M4 subset stub in Rust crate) |
+| Classic `wchar_t` `FuncItem` / `getFuncsArray` | Not loaded (use UTF-8 exports) |
+
 ## M4 message subset
 
 `NPPM_GETCURRENTBUFFERID`, `NPPM_GETCURRENTSCINTILLA`, `NPPM_MENUCOMMAND`

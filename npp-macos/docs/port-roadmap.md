@@ -15,19 +15,20 @@ Document Map, Clipboard History, session/recent/config.xml, …)
 
 ## Done — Phase 6 (partial): Plugins host
 
-- Plugins menu: nested `<Name>/<Name>.dylib` + flat scan, `dlopen` probe
-- `getNameUTF8` / `getName` when exported; open plugins folder
-- Full `FuncItem` / `beNotified` dispatch still evolving (`docs/plugin-porting.md`)
+- Discover flat + nested `<Name>/<Name>.dylib`
+- `dlopen` retain, `setInfo`, `getNameUTF8`, `getFuncsArrayUTF8` → Plugins submenu
+- Invoke `PFUNCPLUGINCMD` from menu (`examples/sample-plugin`)
+- `beNotified` / `messageProc` / `NPPM_*` still open (`docs/plugin-porting.md`)
 
 ## Done — Phase 7 (partial): Print, UDL, themes, column, nativeLang
 
 - Print, UDL load-only, Document Map, Clipboard, Character Panel
 - Themes + Appearance + Show Whitespace
 - Edit → Column Mode (Option-drag rectangular selection; multi-insert)
-- Settings → UI Language (nativeLang Entries for top-level menus)
+- Settings → UI Language (Entries + Commands + SubEntries via English-title map)
 
 ## Remaining
 
-- Full plugin ABI (`setInfo` / `getFuncsArray` / `messageProc` invoke)
-- Deeper nativeLang (all menu item ids, dialogs)
+- `beNotified` + `messageProc` / `NPPM_*` host dispatch
 - Multi-caret beyond column rectangles
+- Dialog-string nativeLang (Preferences, Find, …)

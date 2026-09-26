@@ -8,6 +8,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <wchar.h>
 
 typedef uint64_t NppHandle;
 
@@ -44,3 +45,17 @@ __attribute__((visibility("default"))) FuncItem *getFuncsArray(int *);
 __attribute__((visibility("default"))) void beNotified(const void *);
 __attribute__((visibility("default"))) intptr_t messageProc(unsigned int Message, uintptr_t wParam, intptr_t lParam);
 __attribute__((visibility("default"))) bool isUnicode(void);
+
+/* Optional UTF-8 exports for NppMac (preferred over wchar_t on Apple platforms). */
+__attribute__((visibility("default"))) const char *getNameUTF8(void);
+
+typedef struct {
+    char _itemName[NPP_MAC_MENU_ITEM_SIZE];
+    PFUNCPLUGINCMD _pFunc;
+    int _cmdID;
+    bool _init2Check;
+    ShortcutKey *_pShKey;
+} FuncItemUTF8;
+
+__attribute__((visibility("default"))) FuncItemUTF8 *getFuncsArrayUTF8(int *);
+

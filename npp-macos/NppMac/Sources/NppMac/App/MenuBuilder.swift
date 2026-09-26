@@ -133,6 +133,7 @@ enum MenuBuilder {
 
     private static func attach(_ main: NSMenu, title: String, menu: NSMenu) {
         let i = main.addItem(withTitle: title, action: nil, keyEquivalent: "")
+        i.identifier = NSUserInterfaceItemIdentifier("en:\(title)")
         main.setSubmenu(menu, for: i)
         builtMenus.append(menu)
     }
@@ -140,6 +141,8 @@ enum MenuBuilder {
     private static func item(_ menu: NSMenu, _ title: String, _ action: Selector?, _ key: String) {
         let i = menu.addItem(withTitle: title, action: action, keyEquivalent: key)
         i.target = nil
+        // Preserve English title for nativeLang re-application.
+        i.identifier = NSUserInterfaceItemIdentifier("en:\(title)")
     }
 
     /// Theme basenames bundled under Resources/themes (without `.xml`).
@@ -258,50 +261,87 @@ enum MenuBuilder {
         item(menu, "Open Plugins Folder…", #selector(MainWindowController.pluginsOpenFolder(_:)), "")
         item(menu, "Refresh Plugin List", #selector(MainWindowController.pluginsRefresh(_:)), "")
         menu.addItem(.separator())
-        let entries = PluginHost.discover()
-        if entries.isEmpty {
+
+        PluginRuntime.shared.reload()
+        let plugins = PluginRuntime.shared.loaded
+        if plugins.isEmpty {
             let empty = menu.addItem(withTitle: "(No plugins found)", action: nil, keyEquivalent: "")
             empty.isEnabled = false
-        } else {
-            for e in entries {
-                let title = e.loadable ? e.displayName : "\(e.displayName) (unloadable)"
-                let i = menu.addItem(
-                    withTitle: title,
-                    action: #selector(MainWindowController.pluginsInvoke(_:)),
+            return
+        }
+        for plugin in plugins {
+            let parent = menu.addItem(withTitle: plugin.displayName, action: nil, keyEquivalent: "")
+            parent.toolTip = plugin.path.path
+            if plugin.commands.isEmpty {
+                // Loaded but no FuncItemUTF8 exports — show path info.
+                parent.action = #selector(MainWindowController.pluginsInvoke(_:))
+                parent.representedObject = plugin.path
+                parent.target = nil
+                continue
+            }
+            let sub = NSMenu(title: plugin.displayName)
+            for cmd in plugin.commands {
+                let i = sub.addItem(
+                    withTitle: cmd.title,
+                    action: #selector(PluginCommandTarget.run(_:)),
                     keyEquivalent: ""
                 )
-                i.representedObject = e.url
-                i.toolTip = e.url.path
-                i.isEnabled = e.loadable
-                i.target = nil
+                i.target = cmd
+            }
+            menu.setSubmenu(sub, for: parent)
+        }
+    }
+
+    /// Apply nativeLang titles (top-level Entries + Commands matched by English title).
+    static func applyNativeLangTitles() {
+        guard let main = NSApp.mainMenu else { return }
+        let topMap: [String: String] = [
+            "File": "file",
+            "Edit": "edit",
+            "Search": "search",
+            "View": "view",
+            "Encoding": "encoding",
+            "Language": "language",
+            "Settings": "settings",
+            "Tools": "tools",
+            "Macro": "macro",
+            "Run": "run",
+            "Plugins": "Plugins",
+            "Window": "Window",
+            "Help": "help",
+        ]
+        for item in main.items {
+            let english: String
+            if let id = item.identifier?.rawValue, id.hasPrefix("en:") {
+                english = String(id.dropFirst(3))
+            } else {
+                english = item.title
+            }
+            if let mid = topMap[english] {
+                item.title = NativeLang.menuTitle(id: mid, fallback: english)
+                item.identifier = NSUserInterfaceItemIdentifier("en:\(english)")
+            }
+            if let sub = item.submenu {
+                applyNativeLangRecursive(sub)
             }
         }
     }
 
-    /// Apply nativeLang top-level titles to the main menu.
-    static func applyNativeLangTitles() {
-        guard let main = NSApp.mainMenu else { return }
-        let map: [(String, String)] = [
-            ("File", "file"),
-            ("Edit", "edit"),
-            ("Search", "search"),
-            ("View", "view"),
-            ("Encoding", "encoding"),
-            ("Language", "language"),
-            ("Settings", "settings"),
-            ("Tools", "tools"),
-            ("Macro", "macro"),
-            ("Run", "run"),
-            ("Plugins", "Plugins"),
-            ("Window", "Window"),
-            ("Help", "help"),
-        ]
-        for item in main.items {
-            for (english, id) in map {
-                if item.title == english || item.submenu?.title == english {
-                    item.title = NativeLang.menuTitle(id: id, fallback: english)
-                    break
-                }
+    private static func applyNativeLangRecursive(_ menu: NSMenu) {
+        for item in menu.items {
+            if item.isSeparatorItem { continue }
+            let english: String
+            if let id = item.identifier?.rawValue, id.hasPrefix("en:") {
+                english = String(id.dropFirst(3))
+            } else {
+                english = item.title
+                item.identifier = NSUserInterfaceItemIdentifier("en:\(english)")
+            }
+            if let loc = NativeLang.title(forEnglish: english) {
+                item.title = loc
+            }
+            if let sub = item.submenu {
+                applyNativeLangRecursive(sub)
             }
         }
     }

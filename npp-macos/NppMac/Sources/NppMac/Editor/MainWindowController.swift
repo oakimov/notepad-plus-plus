@@ -1784,25 +1784,26 @@ final class MainWindowController: NSWindowController {
 
     @objc func pluginsRefresh(_ sender: Any?) {
         MenuBuilder.reloadPlugins(target: self)
-        statusLabel.stringValue = "Plugins: \(PluginHost.discover().count) found"
+        let n = PluginRuntime.shared.loaded.count
+        let cmds = PluginRuntime.shared.loaded.reduce(0) { $0 + $1.commands.count }
+        statusLabel.stringValue = "Plugins: \(n) loaded, \(cmds) commands"
     }
 
     @objc func pluginsInvoke(_ sender: Any?) {
         guard let item = sender as? NSMenuItem, let url = item.representedObject as? URL else { return }
-        let entries = PluginHost.discover()
-        let entry = entries.first { $0.url == url }
+        let plugin = PluginRuntime.shared.loaded.first { $0.path == url }
         let alert = NSAlert()
-        alert.messageText = entry?.displayName ?? url.lastPathComponent
-        if entry?.loadable == true {
+        alert.messageText = plugin?.displayName ?? url.lastPathComponent
+        if let plugin {
             alert.informativeText = """
-            Loaded \(url.path).
+            Loaded \(url.path)
 
-            Notepad++ plugin ABI (`setInfo` / `getFuncsArray` / `beNotified`) is partially supported.
-            Export `getNameUTF8` for a friendly menu title. Full FuncItem dispatch is still evolving —
-            see docs/plugin-porting.md.
+            Commands: \(plugin.commands.count)
+            Export getNameUTF8 + getFuncsArrayUTF8 for menu commands.
+            See docs/plugin-porting.md and examples/sample-plugin/.
             """
         } else {
-            alert.informativeText = "Could not dlopen this plugin:\n\(url.path)"
+            alert.informativeText = "Could not load plugin:\n\(url.path)"
         }
         alert.runModal()
     }
