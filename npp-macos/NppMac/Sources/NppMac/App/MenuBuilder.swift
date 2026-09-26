@@ -47,7 +47,7 @@ enum MenuBuilder {
         attach(mainMenu, title: "View", menu: view)
 
         let language = NSMenu(title: "Language")
-        item(language, "Auto-detect by Extension", #selector(MainWindowController.langAuto(_:)), "")
+        addLanguage(language)
         attach(mainMenu, title: "Language", menu: language)
 
         let encoding = NSMenu(title: "Encoding")
@@ -122,6 +122,12 @@ enum MenuBuilder {
         item(m, "Join Lines", #selector(MainWindowController.editJoinLines(_:)), "j")
         item(m, "Move Line Up", #selector(MainWindowController.editMoveUp(_:)), "")
         item(m, "Move Line Down", #selector(MainWindowController.editMoveDown(_:)), "")
+        m.addItem(.separator())
+        item(m, "Toggle Line Comment", #selector(MainWindowController.editToggleComment(_:)), "/")
+        item(m, "Sort Lines Ascending", #selector(MainWindowController.editSortLines(_:)), "")
+        item(m, "Indent", #selector(MainWindowController.editIndent(_:)), "")
+        item(m, "Unindent", #selector(MainWindowController.editUnindent(_:)), "")
+        m.addItem(.separator())
         item(m, "UPPERCASE", #selector(MainWindowController.editUpperCase(_:)), "U")
         item(m, "lowercase", #selector(MainWindowController.editLowerCase(_:)), "u")
         item(m, "Trim Trailing Space", #selector(MainWindowController.editTrimTrailing(_:)), "")
@@ -138,9 +144,24 @@ enum MenuBuilder {
         item(m, "Find in Files…", #selector(MainWindowController.searchFindInFiles(_:)), "")
         m.addItem(.separator())
         item(m, "Go to Line…", #selector(MainWindowController.searchGotoLine(_:)), "")
+        m.addItem(.separator())
+        let bookmark = NSMenu(title: "Bookmark")
+        item(bookmark, "Toggle Bookmark", #selector(MainWindowController.bookmarkToggle(_:)), "")
+        item(bookmark, "Next Bookmark", #selector(MainWindowController.bookmarkNext(_:)), "")
+        item(bookmark, "Previous Bookmark", #selector(MainWindowController.bookmarkPrev(_:)), "")
+        item(bookmark, "Clear All Bookmarks", #selector(MainWindowController.bookmarkClearAll(_:)), "")
+        let bmParent = m.addItem(withTitle: "Bookmark", action: nil, keyEquivalent: "")
+        m.setSubmenu(bookmark, for: bmParent)
     }
 
     private static func addView(_ m: NSMenu) {
+        item(m, "Word Wrap", #selector(MainWindowController.viewToggleWrap(_:)), "")
+        item(m, "Show Line Numbers", #selector(MainWindowController.viewToggleLineNumbers(_:)), "")
+        m.addItem(.separator())
+        item(m, "Zoom In", #selector(MainWindowController.viewZoomIn(_:)), "+")
+        item(m, "Zoom Out", #selector(MainWindowController.viewZoomOut(_:)), "-")
+        item(m, "Restore Default Zoom", #selector(MainWindowController.viewZoomReset(_:)), "0")
+        m.addItem(.separator())
         item(m, "Document Switcher", #selector(MainWindowController.viewDocSwitcher(_:)), "")
         item(m, "Toggle Status Bar", #selector(MainWindowController.viewToggleStatusBar(_:)), "")
     }
@@ -148,6 +169,75 @@ enum MenuBuilder {
     private static func addEncoding(_ m: NSMenu) {
         item(m, "UTF-8", #selector(MainWindowController.encUtf8(_:)), "")
         item(m, "UTF-8 with BOM", #selector(MainWindowController.encUtf8Bom(_:)), "")
+        item(m, "UTF-16 LE", #selector(MainWindowController.encUtf16Le(_:)), "")
+        item(m, "UTF-16 BE", #selector(MainWindowController.encUtf16Be(_:)), "")
         item(m, "ANSI (Windows-1252)", #selector(MainWindowController.encAnsi(_:)), "")
+        m.addItem(.separator())
+        let eol = NSMenu(title: "EOL Conversion")
+        item(eol, "Windows (CRLF)", #selector(MainWindowController.eolCrlf(_:)), "")
+        item(eol, "Unix (LF)", #selector(MainWindowController.eolLf(_:)), "")
+        item(eol, "Macintosh (CR)", #selector(MainWindowController.eolCr(_:)), "")
+        let eolParent = m.addItem(withTitle: "EOL Conversion", action: nil, keyEquivalent: "")
+        m.setSubmenu(eol, for: eolParent)
+    }
+
+    /// Compact Language menu: Normal text, letter submenus A–Z, Auto-detect.
+    /// Populated once at build time from a temporary engine (XML catalog).
+    private static func addLanguage(_ m: NSMenu) {
+        item(m, "None (Normal text)", #selector(MainWindowController.langSelect(_:)), "")
+        if let none = m.items.last {
+            none.representedObject = "normal"
+        }
+        m.addItem(.separator())
+
+        let langs = NppEngine(langsModel: Bundle.main.url(forResource: "langs.model", withExtension: "xml")?.path)
+            .languages()
+            .filter { $0.key != "normal" }
+
+        // Top-level specials matching Notepad++ compact menu quirks.
+        let topLevelKeys: Set<String> = ["kix", "xml", "yaml"]
+        let topLevel = langs.filter { topLevelKeys.contains($0.key) }
+        let submenuLangs = langs.filter { !topLevelKeys.contains($0.key) }
+
+        var submenuByLetter: [Character: [(key: String, display: String)]] = [:]
+        for lang in submenuLangs {
+            let letter = lang.display.first.map { ch -> Character in
+                String(ch).uppercased().first ?? "#"
+            } ?? "#"
+            let key: Character = letter.isLetter ? letter : "#"
+            submenuByLetter[key, default: []].append(lang)
+        }
+
+        for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" {
+            guard let items = submenuByLetter[letter], !items.isEmpty else { continue }
+            let sub = NSMenu(title: String(letter))
+            for lang in items.sorted(by: { $0.display.localizedCaseInsensitiveCompare($1.display) == .orderedAscending }) {
+                let i = sub.addItem(
+                    withTitle: lang.display,
+                    action: #selector(MainWindowController.langSelect(_:)),
+                    keyEquivalent: ""
+                )
+                i.target = nil
+                i.representedObject = lang.key
+            }
+            let parent = m.addItem(withTitle: String(letter), action: nil, keyEquivalent: "")
+            m.setSubmenu(sub, for: parent)
+        }
+
+        if !topLevel.isEmpty {
+            m.addItem(.separator())
+            for lang in topLevel.sorted(by: { $0.display.localizedCaseInsensitiveCompare($1.display) == .orderedAscending }) {
+                let i = m.addItem(
+                    withTitle: lang.display,
+                    action: #selector(MainWindowController.langSelect(_:)),
+                    keyEquivalent: ""
+                )
+                i.target = nil
+                i.representedObject = lang.key
+            }
+        }
+
+        m.addItem(.separator())
+        item(m, "Auto-detect by Extension", #selector(MainWindowController.langAuto(_:)), "")
     }
 }

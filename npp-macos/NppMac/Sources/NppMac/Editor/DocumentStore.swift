@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Document facade over the Rust engine (`npp-core` / `npp-fs` via FFI).
@@ -60,15 +61,18 @@ final class DocumentStore {
     }
 
     /// Tab/status metadata without copying the full buffer (avoids double-load on refresh).
-    func selectedMeta() -> (title: String, isDirty: Bool, encodingLabel: String, language: String, fileURL: URL?)? {
+    func selectedMeta() -> (title: String, isDirty: Bool, encodingLabel: String, language: String, languageDisplay: String, eolLabel: String, fileURL: URL?)? {
         let i = selectedIndex
         guard i >= 0, i < engine.count else { return nil }
         let path = engine.path(at: i)
+        let lang = engine.language(at: i)
         return (
             engine.title(at: i),
             engine.isDirty(at: i),
             engine.encoding(at: i).label,
-            engine.language(at: i),
+            lang,
+            NppEngine.displayName(for: lang),
+            engine.eol(at: i).label,
             path.map { URL(fileURLWithPath: $0) }
         )
     }
@@ -113,7 +117,25 @@ final class DocumentStore {
         let idx = engine.selectedIndex
         engine.setText(at: idx, text)
         engine.markSaved(at: idx, title: title, path: url?.path)
-        _ = language
+        _ = engine.setLanguage(at: idx, language)
+    }
+
+    func setLanguage(_ language: String) {
+        let i = selectedIndex
+        guard i >= 0 else { return }
+        _ = engine.setLanguage(at: i, language)
+    }
+
+    func languages() -> [(key: String, display: String)] {
+        engine.languages()
+    }
+
+    func language(forPath path: String) -> String {
+        engine.language(forPath: path)
+    }
+
+    func color(forScope scope: Int32, language: String) -> NSColor {
+        engine.color(forScope: scope, language: language)
     }
 
     func updateSelected(text: String) {
@@ -162,6 +184,16 @@ final class DocumentStore {
 
     func encoding(at index: Int) -> DocEncoding {
         engine.encoding(at: index)
+    }
+
+    func setEol(_ eol: DocEol) {
+        let i = selectedIndex
+        guard i >= 0 else { return }
+        engine.setEol(at: i, eol)
+    }
+
+    func eol(at index: Int) -> DocEol {
+        engine.eol(at: index)
     }
 
     func highlight(language: String, text: String) -> [NppEngine.Token] {

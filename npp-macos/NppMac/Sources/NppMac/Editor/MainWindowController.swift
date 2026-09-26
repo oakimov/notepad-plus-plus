@@ -7,6 +7,13 @@ final class MainWindowController: NSWindowController {
     private let statusLabel: NSTextField
     private var tabBar: TabBarView?
     private var findPanel: FindPanel?
+    private weak var editorScroll: NSScrollView?
+    private var lineNumberRuler: LineNumberRulerView?
+    private var wordWrapEnabled = false
+    private var lineNumbersVisible = true
+    private var editorFontSize: CGFloat = 13
+    /// Bookmarked line indices (0-based) per document index.
+    private var bookmarksByDoc: [Int: Set<Int>] = [:]
     /// Editor bottom → find panel top (find visible) or → status bar top (hidden).
     private var editorAboveFind: NSLayoutConstraint?
     private var editorAboveStatus: NSLayoutConstraint?
@@ -19,7 +26,11 @@ final class MainWindowController: NSWindowController {
     /// Set once the user resolved every unsaved document for window close / quit.
     private var closeConfirmed = false
 
-    private static let editorFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    private static let defaultFontSize: CGFloat = 13
+
+    private var editorFont: NSFont {
+        NSFont.monospacedSystemFont(ofSize: editorFontSize, weight: .regular)
+    }
 
     init(documents store: DocumentStore) {
         self.store = store
@@ -58,8 +69,11 @@ final class MainWindowController: NSWindowController {
         tv.autoresizingMask = [.width]
         tv.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         tv.textContainer?.widthTracksTextView = false
-        tv.font = editorFont
-        tv.typingAttributes = [.font: editorFont, .foregroundColor: NSColor.textColor]
+        tv.font = NSFont.monospacedSystemFont(ofSize: defaultFontSize, weight: .regular)
+        tv.typingAttributes = [
+            .font: NSFont.monospacedSystemFont(ofSize: defaultFontSize, weight: .regular),
+            .foregroundColor: NSColor.textColor,
+        ]
         tv.allowsUndo = true
         tv.isRichText = false
         tv.importsGraphics = false
@@ -92,6 +106,20 @@ final class MainWindowController: NSWindowController {
         scroll.autohidesScrollers = true
         scroll.borderType = .noBorder
         scroll.documentView = textView
+        scroll.hasVerticalRuler = true
+        scroll.rulersVisible = true
+        let ruler = LineNumberRulerView(scrollView: scroll, textView: textView)
+        scroll.verticalRulerView = ruler
+        lineNumberRuler = ruler
+        editorScroll = scroll
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(editorBoundsDidChange(_:)),
+            name: NSView.boundsDidChangeNotification,
+            object: scroll.contentView
+        )
+        scroll.contentView.postsBoundsChangedNotifications = true
 
         let find = FindPanel(
             onFind: { [weak self] in self?.performFind($0) },
@@ -166,17 +194,45 @@ final class MainWindowController: NSWindowController {
             syncingText = false
         }
         editorNeedsSync = false
-        updateChrome(title: meta.title, isDirty: meta.isDirty, encoding: meta.encodingLabel, language: meta.language)
+        updateChrome(
+            title: meta.title,
+            isDirty: meta.isDirty,
+            encoding: meta.encodingLabel,
+            language: meta.languageDisplay,
+            eol: meta.eolLabel
+        )
         scheduleHighlight()
+        refreshLineNumbers()
     }
 
-    private func updateChrome(title: String, isDirty: Bool, encoding: String, language: String) {
+    private func updateChrome(title: String, isDirty: Bool, encoding: String, language: String, eol: String) {
         window?.title = isDirty ? "\(title) •" : title
         window?.representedURL = store.selectedMeta()?.fileURL
         let text = textView.string
         let lines = text.utf8.lazy.filter { $0 == UInt8(ascii: "\n") }.count + 1
+        let caret = textView.selectedRange().location
+        let (ln, col) = lineColumn(at: caret, in: text)
         statusLabel.stringValue =
-            "\(title) — \(lines) lines, \(text.unicodeScalars.count) chars — \(encoding) — \(language)"
+            "Ln \(ln), Col \(col) — \(lines) lines — \(encoding) — \(eol) — \(language)"
+    }
+
+    private func lineColumn(at utf16: Int, in text: String) -> (Int, Int) {
+        let ns = text as NSString
+        let clamped = max(0, min(utf16, ns.length))
+        var line = 1
+        var col = 1
+        var i = 0
+        while i < clamped {
+            let ch = ns.character(at: i)
+            if ch == 10 { // \n
+                line += 1
+                col = 1
+            } else {
+                col += 1
+            }
+            i += 1
+        }
+        return (line, col)
     }
 
     private func scheduleSync() {
@@ -186,8 +242,15 @@ final class MainWindowController: NSWindowController {
             self.syncEditorToStore()
             self.tabBar?.reload()
             if let meta = self.store.selectedMeta() {
-                self.updateChrome(title: meta.title, isDirty: meta.isDirty, encoding: meta.encodingLabel, language: meta.language)
+                self.updateChrome(
+                    title: meta.title,
+                    isDirty: meta.isDirty,
+                    encoding: meta.encodingLabel,
+                    language: meta.languageDisplay,
+                    eol: meta.eolLabel
+                )
             }
+            self.refreshLineNumbers()
         }
         syncWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
@@ -207,27 +270,15 @@ final class MainWindowController: NSWindowController {
         let tokens = store.highlight(language: meta.language, text: text)
         let full = NSRange(location: 0, length: storage.length)
         storage.beginEditing()
-        storage.setAttributes([.font: Self.editorFont, .foregroundColor: NSColor.textColor], range: full)
+        storage.setAttributes([.font: editorFont, .foregroundColor: NSColor.textColor], range: full)
         for t in tokens {
             let end = NSMaxRange(t.range)
             guard t.range.location >= 0, end <= storage.length else { continue }
-            storage.addAttribute(.foregroundColor, value: Self.color(forScope: t.scope), range: t.range)
+            let color = store.color(forScope: t.scope, language: meta.language)
+            storage.addAttribute(.foregroundColor, value: color, range: t.range)
         }
         storage.endEditing()
-    }
-
-    private static func color(forScope scope: Int32) -> NSColor {
-        switch scope {
-        case 1: return NSColor.systemPurple // keyword
-        case 2: return NSColor.systemTeal // type
-        case 3: return NSColor.systemRed // string
-        case 4: return NSColor.systemGray // comment
-        case 5: return NSColor.systemOrange // number
-        case 6: return NSColor.systemBrown // operator
-        case 7: return NSColor.systemBlue // function
-        case 8: return NSColor.systemPink // preproc
-        default: return NSColor.textColor
-        }
+        refreshLineNumbers()
     }
 
     /// Replace `range` through NSTextView so the edit is undoable and flows back via `textDidChange`.
@@ -536,6 +587,73 @@ final class MainWindowController: NSWindowController {
         applyEditorText(text, caret: caret)
     }
 
+    @objc func editToggleComment(_ sender: Any?) {
+        let token = commentToken(for: store.selectedMeta()?.language ?? "normal")
+        guard !token.isEmpty else { return }
+        let text = textView.string
+        let caret = textView.selectedRange().location
+        var lines = text.components(separatedBy: "\n")
+        let i = lineIndex(at: caret, in: text)
+        guard lines.indices.contains(i) else { return }
+        let needComment = !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix(token)
+        if needComment {
+            let indent = lines[i].prefix(while: { $0 == " " || $0 == "\t" }).count
+            let idx = lines[i].index(lines[i].startIndex, offsetBy: indent)
+            lines[i].insert(contentsOf: token + " ", at: idx)
+        } else if let range = lines[i].range(of: token) {
+            var end = range.upperBound
+            if lines[i][end...].hasPrefix(" ") {
+                end = lines[i].index(after: end)
+            }
+            lines[i].removeSubrange(range.lowerBound..<end)
+        }
+        applyEditorText(lines.joined(separator: "\n"), caret: caret)
+    }
+
+    @objc func editSortLines(_ sender: Any?) {
+        let caret = textView.selectedRange().location
+        var lines = textView.string.components(separatedBy: "\n")
+        let trailing = textView.string.hasSuffix("\n")
+        if trailing, lines.last == "" { lines.removeLast() }
+        lines.sort()
+        var out = lines.joined(separator: "\n")
+        if trailing { out += "\n" }
+        applyEditorText(out, caret: caret)
+    }
+
+    @objc func editIndent(_ sender: Any?) {
+        transformCurrentLine { lines, i in lines[i] = "\t" + lines[i] }
+    }
+
+    @objc func editUnindent(_ sender: Any?) {
+        transformCurrentLine { lines, i in
+            if lines[i].hasPrefix("\t") {
+                lines[i].removeFirst()
+            } else if lines[i].hasPrefix("    ") {
+                lines[i].removeFirst(4)
+            } else if lines[i].hasPrefix(" ") {
+                lines[i].removeFirst()
+            }
+        }
+    }
+
+    private func commentToken(for language: String) -> String {
+        switch language {
+        case "python", "ruby", "bash", "yaml", "toml", "perl", "r", "cmake":
+            return "#"
+        case "lua", "sql", "haskell":
+            return "--"
+        case "vb", "vbnet":
+            return "'"
+        case "matlab":
+            return "%"
+        case "html", "xml", "markdown":
+            return "" // block comments only; skip for now
+        default:
+            return "//"
+        }
+    }
+
     private func transformSelection(_ f: (String) -> String) {
         let range = textView.selectedRange()
         guard range.length > 0 else { return }
@@ -726,8 +844,149 @@ final class MainWindowController: NSWindowController {
         statusHeight?.isActive = statusLabel.isHidden
     }
 
+    @objc func viewToggleWrap(_ sender: Any?) {
+        wordWrapEnabled.toggle()
+        applyWrapMode()
+    }
+
+    @objc func viewToggleLineNumbers(_ sender: Any?) {
+        lineNumbersVisible.toggle()
+        editorScroll?.rulersVisible = lineNumbersVisible
+    }
+
+    @objc func viewZoomIn(_ sender: Any?) {
+        editorFontSize = min(editorFontSize + 1, 48)
+        applyEditorFont()
+    }
+
+    @objc func viewZoomOut(_ sender: Any?) {
+        editorFontSize = max(editorFontSize - 1, 8)
+        applyEditorFont()
+    }
+
+    @objc func viewZoomReset(_ sender: Any?) {
+        editorFontSize = Self.defaultFontSize
+        applyEditorFont()
+    }
+
+    private func applyWrapMode() {
+        guard let container = textView.textContainer else { return }
+        if wordWrapEnabled {
+            textView.isHorizontallyResizable = false
+            container.widthTracksTextView = true
+            if let scroll = editorScroll {
+                container.containerSize = NSSize(
+                    width: max(scroll.contentSize.width, 1),
+                    height: CGFloat.greatestFiniteMagnitude
+                )
+            }
+            editorScroll?.hasHorizontalScroller = false
+        } else {
+            textView.isHorizontallyResizable = true
+            container.widthTracksTextView = false
+            container.containerSize = NSSize(
+                width: CGFloat.greatestFiniteMagnitude,
+                height: CGFloat.greatestFiniteMagnitude
+            )
+            editorScroll?.hasHorizontalScroller = true
+        }
+        textView.needsDisplay = true
+        refreshLineNumbers()
+    }
+
+    private func applyEditorFont() {
+        let font = editorFont
+        textView.font = font
+        textView.typingAttributes = [.font: font, .foregroundColor: NSColor.textColor]
+        scheduleHighlight()
+        refreshLineNumbers()
+    }
+
+    @objc func editorBoundsDidChange(_ note: Notification) {
+        refreshLineNumbers()
+    }
+
+    private func refreshLineNumbers() {
+        let marks = bookmarksByDoc[store.selectedIndex] ?? []
+        lineNumberRuler?.setBookmarks(marks)
+        lineNumberRuler?.needsDisplay = true
+    }
+
+    private func currentLineIndex() -> Int {
+        let ns = textView.string as NSString
+        let loc = min(textView.selectedRange().location, ns.length)
+        var line = 0
+        var i = 0
+        while i < loc {
+            let range = ns.lineRange(for: NSRange(location: i, length: 0))
+            if range.location >= loc { break }
+            i = NSMaxRange(range)
+            line += 1
+            if range.length == 0 { break }
+        }
+        return line
+    }
+
+    @objc func bookmarkToggle(_ sender: Any?) {
+        let idx = store.selectedIndex
+        var set = bookmarksByDoc[idx] ?? []
+        let line = currentLineIndex()
+        if set.contains(line) {
+            set.remove(line)
+        } else {
+            set.insert(line)
+        }
+        bookmarksByDoc[idx] = set
+        refreshLineNumbers()
+    }
+
+    @objc func bookmarkNext(_ sender: Any?) {
+        jumpBookmark(forward: true)
+    }
+
+    @objc func bookmarkPrev(_ sender: Any?) {
+        jumpBookmark(forward: false)
+    }
+
+    @objc func bookmarkClearAll(_ sender: Any?) {
+        bookmarksByDoc[store.selectedIndex] = []
+        refreshLineNumbers()
+    }
+
+    private func jumpBookmark(forward: Bool) {
+        let marks = (bookmarksByDoc[store.selectedIndex] ?? []).sorted()
+        guard !marks.isEmpty else { return }
+        let cur = currentLineIndex()
+        let target: Int
+        if forward {
+            target = marks.first(where: { $0 > cur }) ?? marks[0]
+        } else {
+            target = marks.last(where: { $0 < cur }) ?? marks[marks.count - 1]
+        }
+        goToLineNumber(target + 1)
+    }
+
+    private func goToLineNumber(_ oneBased: Int) {
+        let ns = textView.string as NSString
+        var line = 1
+        var i = 0
+        while i < ns.length {
+            if line == oneBased {
+                textView.setSelectedRange(NSRange(location: i, length: 0))
+                textView.scrollRangeToVisible(NSRange(location: i, length: 0))
+                return
+            }
+            let range = ns.lineRange(for: NSRange(location: i, length: 0))
+            i = NSMaxRange(range)
+            line += 1
+            if range.length == 0 { break }
+        }
+    }
+
     @objc func encUtf8(_ sender: Any?) { setEncoding(.utf8) }
     @objc func encUtf8Bom(_ sender: Any?) { setEncoding(.utf8Bom) }
+    @objc func encUtf16Le(_ sender: Any?) { setEncoding(.utf16Le) }
+    @objc func encUtf16Be(_ sender: Any?) { setEncoding(.utf16Be) }
     @objc func encAnsi(_ sender: Any?) { setEncoding(.ansi) }
 
     private func setEncoding(_ enc: DocEncoding) {
@@ -736,9 +995,37 @@ final class MainWindowController: NSWindowController {
         refresh()
     }
 
+    @objc func eolCrlf(_ sender: Any?) { setEol(.crlf) }
+    @objc func eolLf(_ sender: Any?) { setEol(.lf) }
+    @objc func eolCr(_ sender: Any?) { setEol(.cr) }
+
+    private func setEol(_ eol: DocEol) {
+        syncEditorToStore()
+        store.setEol(eol)
+        refresh()
+    }
+
+    @objc func langSelect(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem,
+              let key = item.representedObject as? String
+        else { return }
+        syncEditorToStore()
+        store.setLanguage(key)
+        refresh()
+    }
+
     @objc func langAuto(_ sender: Any?) {
-        guard let doc = store.selected, let url = doc.fileURL else { return }
-        _ = NppEngine.language(forPath: url.path)
+        syncEditorToStore()
+        guard let doc = store.selected else { return }
+        let lang: String
+        if let url = doc.fileURL {
+            lang = store.language(forPath: url.path)
+        } else if let name = doc.title.split(separator: "/").last {
+            lang = store.language(forPath: String(name))
+        } else {
+            lang = "normal"
+        }
+        store.setLanguage(lang)
         refresh()
     }
 
@@ -766,6 +1053,47 @@ extension MainWindowController: NSTextViewDelegate {
     /// Each tab keeps its own undo history (the editor view is shared).
     func undoManager(for view: NSTextView) -> UndoManager? {
         store.undoManager(at: store.selectedIndex)
+    }
+}
+
+extension MainWindowController: NSMenuItemValidation {
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(langSelect(_:)),
+           let key = menuItem.representedObject as? String
+        {
+            menuItem.state = (store.selectedMeta()?.language == key) ? .on : .off
+            return true
+        }
+        if menuItem.action == #selector(langAuto(_:)) {
+            menuItem.state = .off
+            return store.selected != nil
+        }
+        if menuItem.action == #selector(viewToggleWrap(_:)) {
+            menuItem.state = wordWrapEnabled ? .on : .off
+        } else if menuItem.action == #selector(viewToggleLineNumbers(_:)) {
+            menuItem.state = lineNumbersVisible ? .on : .off
+        }
+        let enc = store.selectedIndex >= 0 ? store.encoding(at: store.selectedIndex) : nil
+        if menuItem.action == #selector(encUtf8(_:)) {
+            menuItem.state = enc == .utf8 ? .on : .off
+        } else if menuItem.action == #selector(encUtf8Bom(_:)) {
+            menuItem.state = enc == .utf8Bom ? .on : .off
+        } else if menuItem.action == #selector(encUtf16Le(_:)) {
+            menuItem.state = enc == .utf16Le ? .on : .off
+        } else if menuItem.action == #selector(encUtf16Be(_:)) {
+            menuItem.state = enc == .utf16Be ? .on : .off
+        } else if menuItem.action == #selector(encAnsi(_:)) {
+            menuItem.state = enc == .ansi ? .on : .off
+        }
+        let eol = store.selectedIndex >= 0 ? store.eol(at: store.selectedIndex) : nil
+        if menuItem.action == #selector(eolCrlf(_:)) {
+            menuItem.state = eol == .crlf ? .on : .off
+        } else if menuItem.action == #selector(eolLf(_:)) {
+            menuItem.state = eol == .lf ? .on : .off
+        } else if menuItem.action == #selector(eolCr(_:)) {
+            menuItem.state = eol == .cr ? .on : .off
+        }
+        return true
     }
 }
 

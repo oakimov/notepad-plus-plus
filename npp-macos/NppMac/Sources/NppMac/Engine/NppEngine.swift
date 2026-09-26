@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Cnpp_ffi
 
@@ -68,6 +69,33 @@ final class NppEngine {
         return s.isEmpty ? "normal" : s
     }
 
+    @discardableResult
+    func setLanguage(at index: Int, _ language: String) -> Bool {
+        language.withCString { npp_doc_set_language(ptr, Int32(index), $0) }
+    }
+
+    /// Stock languages for the Language menu (`(key, displayName)`).
+    func languages() -> [(key: String, display: String)] {
+        let n = Int(npp_lang_count(ptr))
+        var out: [(String, String)] = []
+        out.reserveCapacity(n)
+        for i in 0..<n {
+            let key = Self.takeString(npp_lang_name(ptr, Int32(i)))
+            let display = Self.takeString(npp_lang_display_name(ptr, Int32(i)))
+            if !key.isEmpty {
+                out.append((key, display.isEmpty ? key : display))
+            }
+        }
+        return out
+    }
+
+    static func displayName(for language: String) -> String {
+        language.withCString { c in
+            let s = takeString(npp_lang_display_name_for(c))
+            return s.isEmpty ? language : s
+        }
+    }
+
     func isDirty(at index: Int) -> Bool {
         npp_doc_is_dirty(ptr, Int32(index))
     }
@@ -79,6 +107,15 @@ final class NppEngine {
     func setEncoding(at index: Int, _ enc: DocEncoding) {
         let cEnc = NppEncoding(rawValue: UInt32(enc.rawValue))
         _ = npp_doc_set_encoding(ptr, Int32(index), cEnc)
+    }
+
+    func eol(at index: Int) -> DocEol {
+        DocEol(rawValue: Int32(npp_doc_eol(ptr, Int32(index)).rawValue)) ?? .crlf
+    }
+
+    func setEol(at index: Int, _ eol: DocEol) {
+        let cEol = NppEol(rawValue: UInt32(eol.rawValue))
+        _ = npp_doc_set_eol(ptr, Int32(index), cEol)
     }
 
     func setText(at index: Int, _ text: String) {
@@ -127,6 +164,21 @@ final class NppEngine {
         }
     }
 
+    func language(forPath path: String) -> String {
+        path.withCString { c in
+            let s = Self.takeString(npp_language_for_path_ex(ptr, c))
+            return s.isEmpty ? "normal" : s
+        }
+    }
+
+    /// RGB color from stylers.model.xml for `scope` under `language`.
+    func color(forScope scope: Int32, language: String) -> NSColor {
+        let hex: String = language.withCString { langC in
+            Self.takeString(npp_scope_fg(ptr, langC, UInt32(scope)))
+        }
+        return Self.color(fromRGBHex: hex) ?? Self.fallbackColor(forScope: scope)
+    }
+
     struct Token {
         var range: NSRange
         var scope: Int32
@@ -150,6 +202,29 @@ final class NppEngine {
         guard let c else { return "" }
         defer { npp_string_free(c) }
         return String(validatingCString: c) ?? String(cString: c)
+    }
+
+    private static func color(fromRGBHex hex: String) -> NSColor? {
+        let cleaned = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard cleaned.count == 6, let value = UInt32(cleaned, radix: 16) else { return nil }
+        let r = CGFloat((value >> 16) & 0xFF) / 255.0
+        let g = CGFloat((value >> 8) & 0xFF) / 255.0
+        let b = CGFloat(value & 0xFF) / 255.0
+        return NSColor(srgbRed: r, green: g, blue: b, alpha: 1)
+    }
+
+    private static func fallbackColor(forScope scope: Int32) -> NSColor {
+        switch scope {
+        case 1: return NSColor.systemPurple
+        case 2: return NSColor.systemTeal
+        case 3: return NSColor.systemRed
+        case 4: return NSColor.systemGray
+        case 5: return NSColor.systemOrange
+        case 6: return NSColor.systemBrown
+        case 7: return NSColor.systemBlue
+        case 8: return NSColor.systemPink
+        default: return NSColor.textColor
+        }
     }
 
     private static func tokensFromUTF8(_ out: UnsafeMutablePointer<NppToken>, count: Int, text: String) -> [Token] {
@@ -199,6 +274,20 @@ enum DocEncoding: Int32 {
         case .utf16Le: return "UTF-16LE"
         case .utf16Be: return "UTF-16BE"
         case .ansi: return "windows-1252"
+        }
+    }
+}
+
+enum DocEol: Int32 {
+    case crlf = 0
+    case lf = 1
+    case cr = 2
+
+    var label: String {
+        switch self {
+        case .crlf: return "CRLF"
+        case .lf: return "LF"
+        case .cr: return "CR"
         }
     }
 }

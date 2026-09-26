@@ -56,6 +56,27 @@ final class DocumentStoreTests: XCTestCase {
         }
     }
 
+    func testLanguageCatalogAndSet() {
+        let store = DocumentStore()
+        let langs = store.languages()
+        XCTAssertGreaterThan(langs.count, 50)
+        XCTAssertEqual(langs.first?.key, "normal")
+        XCTAssertTrue(langs.contains(where: { $0.key == "cpp" && $0.display == "C++" }))
+        store.setLanguage("cpp")
+        XCTAssertEqual(store.selectedMeta()?.language, "cpp")
+        XCTAssertEqual(store.selectedMeta()?.languageDisplay, "C++")
+        let tokens = store.highlight(language: "cpp", text: "// c\nint main() { return 0; }\n")
+        XCTAssertFalse(tokens.isEmpty)
+        XCTAssertTrue(tokens.contains(where: { $0.scope == 4 })) // comment
+        XCTAssertTrue(tokens.contains(where: { $0.scope == 1 })) // keyword
+    }
+
+    func testOpenDocumentHonorsLanguage() {
+        let store = DocumentStore()
+        store.openDocument(title: "x", url: nil, text: "print(1)", language: "python")
+        XCTAssertEqual(store.selectedMeta()?.language, "python")
+    }
+
     func testUndoManagersFollowTabs() {
         let store = DocumentStore()
         store.newDocument()

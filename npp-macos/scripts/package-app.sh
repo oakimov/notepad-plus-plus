@@ -57,10 +57,14 @@ if [[ -d "$RES_BUNDLE" ]]; then
   cp -R "$RES_BUNDLE" "$APP/Contents/Resources/"
 fi
 
-# Stock language model for keyword-fallback highlighting at runtime (optional).
+# Stock language + styler models for keyword highlighting / colors at runtime.
 LANGS="$ROOT/../PowerEditor/src/langs.model.xml"
 if [[ -f "$LANGS" ]]; then
   cp "$LANGS" "$APP/Contents/Resources/langs.model.xml"
+fi
+STYLERS="$ROOT/../PowerEditor/src/stylers.model.xml"
+if [[ -f "$STYLERS" ]]; then
+  cp "$STYLERS" "$APP/Contents/Resources/stylers.model.xml"
 fi
 
 echo "==> built $APP"

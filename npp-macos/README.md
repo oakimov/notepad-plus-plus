@@ -1,29 +1,37 @@
 # NppMac — Notepad++ macOS port (Rust core + native Swift GUI)
 
 In-repo sibling of the Win32 Notepad++ codebase. Faithful behavior port:
-internal tab bar, native menubar, multi-encoding I/O, tree-sitter highlighting.
+internal tab bar, native menubar, multi-encoding I/O, tree-sitter + keyword highlighting.
 
-## Status: viable editor (FFI-linked)
+## Status: viable editor (FFI-linked) + full Language menu
 
 Swift AppKit shell talks to Rust through `crates/npp-ffi` (C ABI):
 
 - Native menubar (App/File/Edit/Search/View/Encoding/Language/Help) with Quit
+- **Language menu**: compact A–Z submenus for all stock langs from `langs.model.xml`,
+  set-language, auto-detect by extension, checkmarks, status-bar display names
+- Syntax highlighting: tree-sitter (13 langs) + keyword/comment/string fallback;
+  colors from `stylers.model.xml`
 - Internal tab bar (select, drag-reorder, × close with dirty prompt)
 - `NSTextView` editor with debounced syntax highlighting
 - Find/Replace, Find-in-Files, Go-to-Line, Preferences stub, status bar
 - Open/save via `npp-fs` (UTF-8 / UTF-8-BOM / UTF-16 / ANSI)
+- View: word wrap, line numbers, zoom, bookmarks
+- Encoding: UTF-16 + EOL Conversion (CRLF/LF/CR)
+- Edit: comment toggle, sort lines, indent/unindent
 
 ## Layout
 
 - `crates/npp-core` — buffer, undo, document manager, search, line ops
 - `crates/npp-fs` — encoding detect/decode + atomic save
 - `crates/npp-config` — langs/stylers/session XML
-- `crates/npp-highlight` — tree-sitter + keyword fallback
+- `crates/npp-highlight` — tree-sitter + keyword fallback + display names
 - `crates/npp-ffi` — C ABI + `include/npp_ffi.h` for Swift
 - `crates/npp-plugin` — plugin host skeleton
 - `NppMac/` — Swift AppKit app (`Package.swift`)
 - `scripts/package-app.sh` / `scripts/notarize.sh` — `.app` + notarization
 - `docs/plugin-porting.md` — Win32 DLL → `.dylib` guide
+- `docs/port-roadmap.md` — remaining port phases
 
 ## Build & test
 
@@ -51,6 +59,8 @@ lower target only produces linker version-mismatch warnings).
 open dist/NppMac.app
 ```
 
+Bundles `langs.model.xml` and `stylers.model.xml` into Resources.
+
 The Dock/Finder icon is the stock Notepad++ `npp.ico` converted to
 `packaging/AppIcon.icns`. Regenerate with `./scripts/make-app-icon.sh`
 (requires Pillow + `iconutil`).
@@ -71,7 +81,8 @@ Win32 `.dll` plugins cannot load on macOS ARM64. Recompile against
 `crates/npp-plugin/include/NppPluginInterface.h` as `.dylib`. See
 `docs/plugin-porting.md`.
 
-## Out of scope (later milestones)
+## Remaining work
 
-Dockable panels, macros, full `NPPM_*` / `IDM_*` coverage, style configurator
-UI, localization beyond string-table plumbing, App Sandbox, notarized DMG.
+See `docs/port-roadmap.md` (editor chrome, Edit/Search depth, session/prefs,
+panels, plugins shell, stretch features). Still deferred: App Sandbox,
+notarized DMG, Plugin Admin, full UDL editor UI.

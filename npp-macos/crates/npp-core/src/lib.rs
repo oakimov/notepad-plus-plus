@@ -109,6 +109,20 @@ impl Buffer {
         self.text.replace('\n', self.ending.as_str())
     }
 
+    /// Current line-ending style (used on save).
+    #[must_use]
+    pub const fn ending(&self) -> LineEnding {
+        self.ending
+    }
+
+    /// Change line-ending style for subsequent saves (marks dirty when changed).
+    pub fn set_ending(&mut self, ending: LineEnding) {
+        if self.ending != ending {
+            self.ending = ending;
+            self.dirty = true;
+        }
+    }
+
     /// Whether the buffer differs from the last [`Self::mark_saved`] point.
     #[must_use]
     pub const fn is_dirty(&self) -> bool {

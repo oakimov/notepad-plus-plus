@@ -69,10 +69,21 @@ char *npp_doc_title(const NppEngine *engine, int32_t index);
 char *npp_doc_path(const NppEngine *engine, int32_t index);
 char *npp_doc_text(const NppEngine *engine, int32_t index);
 char *npp_doc_language(const NppEngine *engine, int32_t index);
+bool npp_doc_set_language(NppEngine *engine, int32_t index, const char *lang);
 
 bool npp_doc_is_dirty(const NppEngine *engine, int32_t index);
 NppEncoding npp_doc_encoding(const NppEngine *engine, int32_t index);
 bool npp_doc_set_encoding(NppEngine *engine, int32_t index, NppEncoding enc);
+
+/// Line ending for UI / save (0=CRLF, 1=LF, 2=CR).
+typedef enum NppEol {
+    NPP_EOL_CRLF = 0,
+    NPP_EOL_LF = 1,
+    NPP_EOL_CR = 2,
+} NppEol;
+
+NppEol npp_doc_eol(const NppEngine *engine, int32_t index);
+bool npp_doc_set_eol(NppEngine *engine, int32_t index, NppEol eol);
 
 /// Replace full document text (marks dirty when changed).
 bool npp_doc_set_text(NppEngine *engine, int32_t index, const char *text);
@@ -83,8 +94,19 @@ bool npp_doc_save(NppEngine *engine, int32_t index, const char *path, char **err
 
 void npp_doc_mark_saved(NppEngine *engine, int32_t index, const char *title, const char *path);
 
-/// Guess language from path extension.
+/// Language menu catalog (from langs.model.xml).
+int32_t npp_lang_count(const NppEngine *engine);
+char *npp_lang_name(const NppEngine *engine, int32_t index);
+char *npp_lang_display_name(const NppEngine *engine, int32_t index);
+char *npp_lang_display_name_for(const char *lang);
+
+/// Guess language from path extension (static fallback map).
 char *npp_language_for_path(const char *path);
+/// Guess language using the engine's XML-backed extension map.
+char *npp_language_for_path_ex(const NppEngine *engine, const char *path);
+
+/// RGB hex (`RRGGBB`) foreground for scope under lang (from stylers.model.xml).
+char *npp_scope_fg(const NppEngine *engine, const char *lang, uint32_t scope);
 
 /// Highlight `text` for `lang`. Allocates *out_tokens; free with npp_tokens_free.
 /// Returns token count (0 on empty / failure).

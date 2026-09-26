@@ -115,7 +115,9 @@ final class MainWindowControllerTests: XCTestCase {
         spin()
         let storage = try XCTUnwrap(try textView(of: wc).textStorage)
         let color = storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
-        XCTAssertEqual(color, NSColor.systemGray)
+        // Comments use stylers.model.xml colors (not plain textColor).
+        XCTAssertNotNil(color)
+        XCTAssertNotEqual(color, NSColor.textColor)
         wc.close()
     }
 

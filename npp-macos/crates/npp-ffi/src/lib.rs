@@ -14,11 +14,13 @@ use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 use std::ptr;
 
-use npp_core::{Buffer, DocumentManager};
+use npp_core::{Buffer, DocumentManager, LineEnding};
 use npp_fs::Encoding;
 use npp_highlight::{
-    groups_from_keywords, has_grammar, highlight_keywords, highlight_tree_sitter,
-    language_for_extension, Scope, Token,
+    bgr_to_rgb, build_extension_map, default_scope_rgb, display_name, grammar_key,
+    groups_from_keywords, highlight_keyword_lang, highlight_keywords,
+    highlight_tree_sitter, is_menu_language, language_for_extension, language_for_extension_map,
+    merge_tokens, scope_from_style_name, Scope, Token,
 };
 
 /// Per-document UI metadata (path, title, encoding, language).
@@ -31,12 +33,28 @@ struct DocMeta {
     language: String,
 }
 
+/// Comment delimiters + keyword groups for one language.
+struct LangHighlight {
+    comment_line: String,
+    comment_start: String,
+    comment_end: String,
+    groups: Vec<(Scope, std::collections::BTreeSet<String>)>,
+}
+
 /// Engine state behind the opaque C handle.
 pub struct Engine {
     docs: DocumentManager,
     meta: Vec<DocMeta>,
-    /// lang name → keyword groups for fallback highlighting.
-    keywords: BTreeMap<String, Vec<(Scope, std::collections::BTreeSet<String>)>>,
+    /// Ordered menu languages (XML `name` keys).
+    lang_names: Vec<String>,
+    /// lang name → keyword/comment data.
+    lang_hl: BTreeMap<String, LangHighlight>,
+    /// extension → language name.
+    ext_map: BTreeMap<String, String>,
+    /// lang → scope → RGB hex (`RRGGBB`).
+    style_colors: BTreeMap<String, BTreeMap<Scope, String>>,
+    /// Global fallback scope colors from the first styler entries seen.
+    global_colors: BTreeMap<Scope, String>,
 }
 
 impl Engine {
@@ -46,32 +64,146 @@ impl Engine {
         let mut eng = Self {
             docs: DocumentManager::new(),
             meta: Vec::new(),
-            keywords: BTreeMap::new(),
+            lang_names: Vec::new(),
+            lang_hl: BTreeMap::new(),
+            ext_map: BTreeMap::new(),
+            style_colors: BTreeMap::new(),
+            global_colors: BTreeMap::new(),
         };
-        eng.load_keywords(langs_model);
+        eng.load_langs(langs_model);
+        eng.load_stylers(langs_model);
         let _ = eng.doc_new();
         eng
     }
 
-    fn load_keywords(&mut self, langs_model: Option<&Path>) {
-        let candidates = [
-            langs_model.map(Path::to_path_buf),
-            Some(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../..")
-                    .join("PowerEditor/src/langs.model.xml"),
-            ),
-            Some(PathBuf::from("PowerEditor/src/langs.model.xml")),
-        ];
-        for p in candidates.iter().flatten() {
-            if let Ok(langs) = npp_config::parse_langs_model(p) {
+    fn model_candidates(explicit: Option<&Path>, file: &str) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        if let Some(p) = explicit {
+            out.push(p.to_path_buf());
+            if let Some(parent) = p.parent() {
+                out.push(parent.join(file));
+            }
+        }
+        out.push(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../..")
+                .join("PowerEditor/src")
+                .join(file),
+        );
+        out.push(PathBuf::from("PowerEditor/src").join(file));
+        out
+    }
+
+    fn load_langs(&mut self, langs_model: Option<&Path>) {
+        for p in Self::model_candidates(langs_model, "langs.model.xml") {
+            if let Ok(langs) = npp_config::parse_langs_model(&p) {
+                let pairs: Vec<(String, String)> = langs
+                    .iter()
+                    .map(|l| (l.name.clone(), l.ext.clone()))
+                    .collect();
+                self.ext_map = build_extension_map(&pairs);
+                self.lang_names.clear();
+                self.lang_hl.clear();
                 for lang in langs {
+                    if (is_menu_language(&lang.name) || lang.name == "normal")
+                        && !self.lang_names.iter().any(|n| n == &lang.name)
+                    {
+                        self.lang_names.push(lang.name.clone());
+                    }
                     let groups = groups_from_keywords(&lang.keywords);
-                    self.keywords.insert(lang.name, groups);
+                    self.lang_hl.insert(
+                        lang.name.clone(),
+                        LangHighlight {
+                            comment_line: lang.comment_line,
+                            comment_start: lang.comment_start,
+                            comment_end: lang.comment_end,
+                            groups,
+                        },
+                    );
+                }
+                // Stable A–Z by display name for the menu (keep `normal` first).
+                self.lang_names.sort_by(|a, b| {
+                    if a == "normal" {
+                        return std::cmp::Ordering::Less;
+                    }
+                    if b == "normal" {
+                        return std::cmp::Ordering::Greater;
+                    }
+                    display_name(a).cmp(display_name(b))
+                });
+                break;
+            }
+        }
+        if self.lang_names.is_empty() {
+            self.lang_names.push("normal".into());
+        }
+    }
+
+    fn load_stylers(&mut self, langs_model: Option<&Path>) {
+        for p in Self::model_candidates(langs_model, "stylers.model.xml") {
+            if let Ok(styles) = npp_config::parse_stylers_model(&p) {
+                for (lexer, rows) in styles {
+                    let mut map = BTreeMap::new();
+                    for row in rows {
+                        if let Some(scope) = scope_from_style_name(&row.name) {
+                            let rgb = bgr_to_rgb(&row.fg);
+                            map.entry(scope).or_insert(rgb.clone());
+                            self.global_colors.entry(scope).or_insert(rgb);
+                        }
+                    }
+                    self.style_colors.insert(lexer, map);
                 }
                 break;
             }
         }
+    }
+
+    fn resolve_lang(&self, lang: &str) -> String {
+        if self.lang_hl.contains_key(lang) {
+            return lang.to_owned();
+        }
+        let gk = grammar_key(lang);
+        if self.lang_hl.contains_key(gk) {
+            return gk.to_owned();
+        }
+        // javascript.js ↔ javascript keyword tables
+        if lang == "javascript" && self.lang_hl.contains_key("javascript.js") {
+            return "javascript.js".into();
+        }
+        lang.to_owned()
+    }
+
+    fn guess_language(&self, path: &Path) -> String {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        if self.ext_map.is_empty() {
+            language_for_extension(ext).to_owned()
+        } else {
+            language_for_extension_map(ext, &self.ext_map)
+        }
+    }
+
+    fn color_for(&self, lang: &str, scope: Scope) -> String {
+        let key = self.resolve_lang(lang);
+        if let Some(m) = self.style_colors.get(&key) {
+            if let Some(c) = m.get(&scope) {
+                return c.clone();
+            }
+        }
+        // Some lexers share the cpp styler (c, cs, objc, …).
+        for alias in ["cpp", "python", "javascript", "rust"] {
+            if let Some(m) = self.style_colors.get(alias) {
+                if let Some(c) = m.get(&scope) {
+                    return c.clone();
+                }
+            }
+        }
+        if let Some(c) = self.global_colors.get(&scope) {
+            return c.clone();
+        }
+        default_scope_rgb(scope).to_owned()
     }
 
     fn doc_new(&mut self) -> i32 {
@@ -146,15 +278,33 @@ fn scope_to_c(s: Scope) -> u32 {
 }
 
 fn highlight_all(engine: &Engine, lang: &str, text: &str) -> Vec<Token> {
-    if let Some(toks) = highlight_tree_sitter(lang, text) {
-        return toks;
-    }
-    if let Some(groups) = engine.keywords.get(lang) {
+    let resolved = engine.resolve_lang(lang);
+    let hl = engine.lang_hl.get(&resolved);
+    let kw_toks = hl.map(|h| {
         let refs: Vec<(Scope, &std::collections::BTreeSet<String>)> =
-            groups.iter().map(|(s, set)| (*s, set)).collect();
-        return highlight_keywords(text, &refs);
+            h.groups.iter().map(|(s, set)| (*s, set)).collect();
+        highlight_keyword_lang(
+            text,
+            &h.comment_line,
+            &h.comment_start,
+            &h.comment_end,
+            &refs,
+        )
+    });
+
+    if let Some(ts) = highlight_tree_sitter(lang, text) {
+        // Tree-sitter owns string/comment ranges; merge keyword/type from XML.
+        let overlay = hl
+            .map(|h| {
+                let refs: Vec<(Scope, &std::collections::BTreeSet<String>)> =
+                    h.groups.iter().map(|(s, set)| (*s, set)).collect();
+                let exclude: Vec<(usize, usize)> = ts.iter().map(|t| (t.start, t.end)).collect();
+                highlight_keywords(text, &refs, &exclude)
+            })
+            .unwrap_or_default();
+        return merge_tokens(ts, overlay);
     }
-    Vec::new()
+    kw_toks.unwrap_or_default()
 }
 
 /// Create a new engine with one empty document.
@@ -226,11 +376,7 @@ pub unsafe extern "C" fn npp_doc_open(engine: *mut Engine, path: *const c_char) 
     };
     let buf = Buffer::from_loaded(&loaded.text);
     let idx = eng.docs.open(buf) as i32;
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
-    let language = language_for_extension(ext).to_owned();
+    let language = eng.guess_language(path);
     let title = path
         .file_name()
         .and_then(|n| n.to_str())
@@ -437,6 +583,41 @@ pub unsafe extern "C" fn npp_doc_set_encoding(engine: *mut Engine, index: i32, e
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn npp_doc_eol(engine: *const Engine, index: i32) -> i32 {
+    let Some(eng) = eng_ref(engine) else {
+        return 0;
+    };
+    if index < 0 {
+        return 0;
+    }
+    match eng.docs.get(index as usize).map(Buffer::ending) {
+        Some(LineEnding::Lf) => 1,
+        Some(LineEnding::Cr) => 2,
+        _ => 0,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn npp_doc_set_eol(engine: *mut Engine, index: i32, eol: i32) -> bool {
+    let Some(eng) = eng_mut(engine) else {
+        return false;
+    };
+    if index < 0 {
+        return false;
+    }
+    let ending = match eol {
+        1 => LineEnding::Lf,
+        2 => LineEnding::Cr,
+        _ => LineEnding::Crlf,
+    };
+    let Some(buf) = eng.docs.get_mut(index as usize) else {
+        return false;
+    };
+    buf.set_ending(ending);
+    true
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn npp_doc_set_text(
     engine: *mut Engine,
     index: i32,
@@ -572,10 +753,124 @@ pub unsafe extern "C" fn npp_doc_mark_saved(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn npp_doc_set_language(
+    engine: *mut Engine,
+    index: i32,
+    lang: *const c_char,
+) -> bool {
+    let Some(eng) = eng_mut(engine) else {
+        return false;
+    };
+    if index < 0 {
+        return false;
+    }
+    let Some(lang) = cstr_to_str(lang) else {
+        return false;
+    };
+    let Some(m) = eng.meta.get_mut(index as usize) else {
+        return false;
+    };
+    m.language = lang.to_owned();
+    true
+}
+
+/// Number of languages available for the Language menu.
+#[no_mangle]
+pub unsafe extern "C" fn npp_lang_count(engine: *const Engine) -> i32 {
+    eng_ref(engine)
+        .map(|e| e.lang_names.len() as i32)
+        .unwrap_or(0)
+}
+
+/// Language key at menu index (caller frees).
+#[no_mangle]
+pub unsafe extern "C" fn npp_lang_name(engine: *const Engine, index: i32) -> *mut c_char {
+    let Some(eng) = eng_ref(engine) else {
+        return ptr::null_mut();
+    };
+    if index < 0 {
+        return ptr::null_mut();
+    }
+    eng.lang_names
+        .get(index as usize)
+        .map(|s| to_cstring(s))
+        .unwrap_or(ptr::null_mut())
+}
+
+/// Display label for menu index (caller frees).
+#[no_mangle]
+pub unsafe extern "C" fn npp_lang_display_name(engine: *const Engine, index: i32) -> *mut c_char {
+    let Some(eng) = eng_ref(engine) else {
+        return ptr::null_mut();
+    };
+    if index < 0 {
+        return ptr::null_mut();
+    }
+    eng.lang_names
+        .get(index as usize)
+        .map(|s| to_cstring(display_name(s)))
+        .unwrap_or(ptr::null_mut())
+}
+
+/// Display label for a language key (caller frees). No engine needed.
+#[no_mangle]
+pub unsafe extern "C" fn npp_lang_display_name_for(lang: *const c_char) -> *mut c_char {
+    let Some(lang) = cstr_to_str(lang) else {
+        return to_cstring("Normal text");
+    };
+    to_cstring(display_name(lang))
+}
+
+/// RGB hex (`RRGGBB`) foreground for `scope` under `lang` (caller frees).
+#[no_mangle]
+pub unsafe extern "C" fn npp_scope_fg(
+    engine: *const Engine,
+    lang: *const c_char,
+    scope: u32,
+) -> *mut c_char {
+    let Some(eng) = eng_ref(engine) else {
+        return to_cstring(default_scope_rgb(Scope::Default));
+    };
+    let lang = cstr_to_str(lang).unwrap_or("normal");
+    let sc = match scope {
+        1 => Scope::Keyword,
+        2 => Scope::Type,
+        3 => Scope::Str,
+        4 => Scope::Comment,
+        5 => Scope::Number,
+        6 => Scope::Operator,
+        7 => Scope::Function,
+        8 => Scope::Preproc,
+        _ => Scope::Default,
+    };
+    to_cstring(&eng.color_for(lang, sc))
+}
+
+/// Guess language from path; uses engine extension map when `engine` is non-null.
+#[no_mangle]
 pub unsafe extern "C" fn npp_language_for_path(path: *const c_char) -> *mut c_char {
     let Some(path) = cstr_to_str(path) else {
         return to_cstring("normal");
     };
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    to_cstring(language_for_extension(ext))
+}
+
+/// Like [`npp_language_for_path`] but uses the engine's XML-backed extension map.
+#[no_mangle]
+pub unsafe extern "C" fn npp_language_for_path_ex(
+    engine: *const Engine,
+    path: *const c_char,
+) -> *mut c_char {
+    let Some(path) = cstr_to_str(path) else {
+        return to_cstring("normal");
+    };
+    if let Some(eng) = eng_ref(engine) {
+        return to_cstring(&eng.guess_language(Path::new(path)));
+    }
     let ext = Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
@@ -613,7 +908,6 @@ pub unsafe extern "C" fn npp_highlight(
     if text.len() > 2 * 1024 * 1024 {
         return 0;
     }
-    let _ = has_grammar(lang);
     let toks = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         highlight_all(&*engine, lang, text)
     })) {
@@ -768,6 +1062,59 @@ mod tests {
             let n = npp_highlight(eng, lang.as_ptr(), text.as_ptr(), &mut toks);
             assert!(n > 0);
             npp_tokens_free(toks, n);
+            npp_engine_destroy(eng);
+        }
+    }
+
+    #[test]
+    fn language_catalog_and_set() {
+        let eng = npp_engine_create();
+        unsafe {
+            let n = npp_lang_count(eng);
+            assert!(n > 50, "expected stock langs, got {n}");
+            let name0 = npp_lang_name(eng, 0);
+            assert!(!name0.is_null());
+            let s = CStr::from_ptr(name0).to_string_lossy().into_owned();
+            npp_string_free(name0);
+            assert_eq!(s, "normal");
+            let cpp = CString::new("cpp").unwrap();
+            assert!(npp_doc_set_language(eng, 0, cpp.as_ptr()));
+            let got = npp_doc_language(eng, 0);
+            assert_eq!(CStr::from_ptr(got).to_str().unwrap(), "cpp");
+            npp_string_free(got);
+            let disp = npp_lang_display_name_for(cpp.as_ptr());
+            assert_eq!(CStr::from_ptr(disp).to_str().unwrap(), "C++");
+            npp_string_free(disp);
+            let fg = npp_scope_fg(eng, cpp.as_ptr(), 1);
+            let fg_s = CStr::from_ptr(fg).to_string_lossy().into_owned();
+            npp_string_free(fg);
+            assert_eq!(fg_s.len(), 6);
+            npp_engine_destroy(eng);
+        }
+    }
+
+    #[test]
+    fn highlight_cpp_keywords_and_comments() {
+        let eng = npp_engine_create();
+        unsafe {
+            let lang = CString::new("cpp").unwrap();
+            let text = CString::new("// hi\nint main() { return 0; }\n").unwrap();
+            let mut toks: *mut NppTokenC = ptr::null_mut();
+            let n = npp_highlight(eng, lang.as_ptr(), text.as_ptr(), &mut toks);
+            assert!(n > 0, "cpp should produce tokens from langs.model.xml");
+            let mut saw_comment = false;
+            let mut saw_kw = false;
+            for i in 0..n as usize {
+                let t = &*toks.add(i);
+                if t.scope == 4 {
+                    saw_comment = true;
+                }
+                if t.scope == 1 {
+                    saw_kw = true;
+                }
+            }
+            npp_tokens_free(toks, n);
+            assert!(saw_comment && saw_kw);
             npp_engine_destroy(eng);
         }
     }
