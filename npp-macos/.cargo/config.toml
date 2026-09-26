@@ -1,0 +1,5 @@
+# Match the Swift app's deployment target (NppMac/Package.swift, packaging/Info.plist)
+# so C objects built by tree-sitter's build scripts don't target the host SDK version.
+# 15.0 is the floor set by the installed Rust std (MacPorts build, LC_BUILD_VERSION minos 15.0).
+[env]
+MACOSX_DEPLOYMENT_TARGET = "15.0"

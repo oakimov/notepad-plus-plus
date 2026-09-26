@@ -1,0 +1,13 @@
+[package]
+name = "npp-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Parameters parity: config.xml / shortcuts.xml / session read-write"
+
+[lib]
+name = "npp_config"
+path = "src/lib.rs"
+
+[dependencies]
+quick-xml = "0.41"

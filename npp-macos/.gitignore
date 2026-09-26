@@ -1,0 +1,20 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+# Cargo.lock is committed for this binary/app workspace; re-include it over
+# the repo-root `*.lock` rule.
+!Cargo.lock
+
+# Swift / SwiftPM
+NppMac/.build/
+NppMac/.swiftpm/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Build output
+/dist/
+**/*.dylib.bak
+
+# macOS
+.DS_Store

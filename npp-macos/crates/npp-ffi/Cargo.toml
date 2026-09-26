@@ -1,0 +1,17 @@
+[package]
+name = "npp-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "C ABI bridge for Swift: npp-core, npp-fs, npp-highlight"
+
+[lib]
+name = "npp_ffi"
+path = "src/lib.rs"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+npp-core = { path = "../npp-core" }
+npp-fs = { path = "../npp-fs" }
+npp-highlight = { path = "../npp-highlight" }
+npp-config = { path = "../npp-config" }

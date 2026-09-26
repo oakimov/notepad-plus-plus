@@ -1,0 +1,4 @@
+module Cnpp_ffi {
+    header "npp_ffi.h"
+    export *
+}
