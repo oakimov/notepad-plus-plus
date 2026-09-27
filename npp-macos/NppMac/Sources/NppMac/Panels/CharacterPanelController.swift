@@ -81,11 +81,33 @@ final class CharacterPanelController: NSWindowController, NSCollectionViewDataSo
             scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -8),
             scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -8),
         ])
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(nativeLangDidChange(_:)),
+            name: NativeLang.didChangeNotification,
+            object: nil
+        )
+        applyLocalizedStrings()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) is not supported")
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func nativeLangDidChange(_ note: Notification) {
+        applyLocalizedStrings()
+    }
+
+    private func applyLocalizedStrings() {
+        window?.title = NativeLang.sectionString(
+            section: "AsciiInsertion", tag: "PanelTitle", fallback: "Character Panel"
+        )
     }
 
     @objc private func filterChanged() {

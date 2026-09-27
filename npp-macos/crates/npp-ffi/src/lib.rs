@@ -18,7 +18,7 @@ use npp_core::{Buffer, DocumentManager, LineEnding};
 use npp_fs::Encoding;
 use npp_highlight::{
     bgr_to_rgb, build_extension_map, default_scope_rgb, display_name, grammar_key,
-    groups_from_keywords, highlight_keyword_lang, highlight_keywords,
+    groups_from_keywords, highlight_keyword_lang, highlight_keywords, highlight_special,
     highlight_tree_sitter, is_menu_language, language_for_extension, language_for_extension_map,
     merge_tokens, scope_from_style_name, Scope, Token,
 };
@@ -280,8 +280,8 @@ impl Engine {
                 return c.clone();
             }
         }
-        // Some lexers share the cpp styler (c, cs, objc, …).
-        for alias in ["cpp", "python", "javascript", "rust"] {
+        // Some lexers share stylers (c→cpp, markup→html/xml, …).
+        for alias in ["cpp", "python", "javascript", "rust", "html", "xml", "css"] {
             if let Some(m) = self.style_colors.get(alias) {
                 if let Some(c) = m.get(&scope) {
                     return c.clone();
@@ -367,6 +367,10 @@ fn scope_to_c(s: Scope) -> u32 {
 
 fn highlight_all(engine: &Engine, lang: &str, text: &str) -> Vec<Token> {
     let resolved = engine.resolve_lang(lang);
+    // Diff / TeX need dedicated scanners (empty or comment-only keyword tables).
+    if let Some(special) = highlight_special(&resolved, text) {
+        return special;
+    }
     let hl = engine.lang_hl.get(&resolved);
     let kw_toks = hl.map(|h| {
         let refs: Vec<(Scope, &std::collections::BTreeSet<String>)> =
@@ -381,7 +385,7 @@ fn highlight_all(engine: &Engine, lang: &str, text: &str) -> Vec<Token> {
     });
 
     if let Some(ts) = highlight_tree_sitter(lang, text) {
-        // Tree-sitter owns string/comment ranges; merge keyword/type from XML.
+        // Tree-sitter owns its ranges (strings/comments/keywords/…); XML keywords fill gaps.
         let overlay = hl
             .map(|h| {
                 let refs: Vec<(Scope, &std::collections::BTreeSet<String>)> =
@@ -1433,4 +1437,224 @@ mod tests {
             npp_engine_destroy(eng);
         }
     }
+
+    #[test]
+    fn xml_tag_color_from_stylers() {
+        let langs = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../PowerEditor/src/langs.model.xml"
+        );
+        let stylers = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../PowerEditor/src/stylers.model.xml"
+        );
+        unsafe {
+            let eng = npp_engine_create_with_langs(CString::new(langs).unwrap().as_ptr());
+            assert!(!eng.is_null());
+            let stylers = CString::new(stylers).unwrap();
+            assert!(npp_stylers_load(eng, stylers.as_ptr(), ptr::null_mut()));
+            let lang = CString::new("xml").unwrap();
+            let fg = npp_scope_fg(eng, lang.as_ptr(), 1); // Keyword ← TAG
+            let s = CStr::from_ptr(fg).to_string_lossy().into_owned();
+            npp_string_free(fg);
+            // TAG fgColor BGR 0000FF → RGB FF0000
+            assert_eq!(s, "FF0000", "xml Keyword should come from TAG, got {s}");
+            npp_engine_destroy(eng);
+        }
+    }
+
+    #[test]
+    fn audit_all_stock_languages_highlight() {
+        use npp_config::parse_langs_model;
+        use npp_highlight::{has_grammar, highlight_tree_sitter, Scope};
+
+        let langs_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../PowerEditor/src/langs.model.xml"
+        );
+        let stylers_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../PowerEditor/src/stylers.model.xml"
+        );
+        let defs = parse_langs_model(Path::new(langs_path)).expect("langs.model.xml");
+        let mut failures: Vec<String> = Vec::new();
+
+        // Tree-sitter languages: require rich scopes on idiomatic samples.
+        let ts_samples: &[(&str, &str, &[Scope])] = &[
+            (
+                "rust",
+                "fn main() {\n  let x = 42; // c\n  foo(\"s\");\n}\n",
+                &[Scope::Keyword, Scope::Number, Scope::Comment, Scope::Str, Scope::Function],
+            ),
+            (
+                "python",
+                "def foo(x):\n  # c\n  return 1\n",
+                &[Scope::Keyword, Scope::Comment, Scope::Number, Scope::Function],
+            ),
+            (
+                "javascript",
+                "function foo(x) {\n  // c\n  return \"s\";\n}\n",
+                &[Scope::Keyword, Scope::Comment, Scope::Str, Scope::Function],
+            ),
+            (
+                "typescript",
+                "function foo(x: number): string {\n  return \"s\";\n}\n",
+                &[Scope::Keyword, Scope::Str, Scope::Function],
+            ),
+            (
+                "go",
+                "package main\nfunc main() {\n  x := 1 // c\n}\n",
+                &[Scope::Keyword, Scope::Comment, Scope::Number, Scope::Function],
+            ),
+            (
+                "java",
+                "class A {\n  int foo() { return 1; /* c */ }\n}\n",
+                &[Scope::Keyword, Scope::Comment, Scope::Number, Scope::Function],
+            ),
+            (
+                "ruby",
+                "def foo(x)\n  # c\n  x + 1\nend\n",
+                &[Scope::Keyword, Scope::Comment, Scope::Number, Scope::Function],
+            ),
+            (
+                "html",
+                "<div class=\"a\"><!-- c -->x</div>\n",
+                &[Scope::Keyword, Scope::Type, Scope::Str, Scope::Comment],
+            ),
+            (
+                "css",
+                "body { color: #fff; /* c */ }\n",
+                &[Scope::Keyword, Scope::Comment],
+            ),
+            (
+                "json",
+                "{\"a\": 1, \"b\": true}\n",
+                &[Scope::Str, Scope::Number],
+            ),
+            (
+                "toml",
+                "a = 1\n# c\n",
+                &[Scope::Number, Scope::Comment],
+            ),
+            (
+                "xml",
+                "<?xml version=\"1.0\"?><!-- c --><root a=\"v\">t</root>\n",
+                &[Scope::Keyword, Scope::Type, Scope::Str, Scope::Comment],
+            ),
+            (
+                "yaml",
+                "a: 1\nb: \"s\"\n# c\n",
+                &[Scope::Number, Scope::Str, Scope::Comment],
+            ),
+        ];
+        for (lang, sample, need) in ts_samples {
+            assert!(has_grammar(lang), "{lang} should have grammar");
+            let Some(toks) = highlight_tree_sitter(lang, sample) else {
+                failures.push(format!("{lang}: tree-sitter returned None"));
+                continue;
+            };
+            if toks.is_empty() {
+                failures.push(format!("{lang}: 0 tokens"));
+                continue;
+            }
+            for scope in *need {
+                if !toks.iter().any(|t| t.scope == *scope) {
+                    failures.push(format!(
+                        "{lang}: missing {scope:?} in {} tokens",
+                        toks.len()
+                    ));
+                }
+            }
+        }
+
+        unsafe {
+            let eng = npp_engine_create_with_langs(CString::new(langs_path).unwrap().as_ptr());
+            assert!(!eng.is_null());
+            let _ = npp_stylers_load(
+                eng,
+                CString::new(stylers_path).unwrap().as_ptr(),
+                ptr::null_mut(),
+            );
+
+            for def in &defs {
+                let name = def.name.as_str();
+                if matches!(name, "normal" | "searchResult" | "udf" | "ext") {
+                    continue;
+                }
+                // Prefer curated TS sample when present.
+                let sample = ts_samples
+                    .iter()
+                    .find(|(k, _, _)| {
+                        name == *k
+                            || (*k == "javascript" && name.contains("javascript"))
+                            || name.starts_with(&format!("{k}."))
+                    })
+                    .map(|(_, s, _)| (*s).to_owned())
+                    .unwrap_or_else(|| {
+                        if name == "diff" {
+                            return "--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new\n".into();
+                        }
+                        if name == "latex" || name == "tex" {
+                            return "% c\n\\begin{document}\nHello\n\\end{document}\n".into();
+                        }
+                        let mut s = String::new();
+                        if !def.comment_line.is_empty() {
+                            s.push_str(&def.comment_line);
+                            s.push_str(" comment\n");
+                        } else if !def.comment_start.is_empty() && !def.comment_end.is_empty() {
+                            s.push_str(&def.comment_start);
+                            s.push('c');
+                            s.push_str(&def.comment_end);
+                            s.push('\n');
+                        }
+                        if let Some(words) = def.keywords.values().next() {
+                            if let Some(w) = words.split_whitespace().next() {
+                                // Prefer uppercase form so case-insensitive matching is exercised.
+                                s.push_str(&w.to_ascii_uppercase());
+                                s.push(' ');
+                            }
+                        }
+                        s.push_str("ident 42 \"str\"\n");
+                        s
+                    });
+
+                let lang = CString::new(name).unwrap();
+                let text = CString::new(sample.as_str()).unwrap();
+                let mut toks: *mut NppTokenC = ptr::null_mut();
+                let count = npp_highlight(eng, lang.as_ptr(), text.as_ptr(), &mut toks);
+                if count <= 0 {
+                    failures.push(format!(
+                        "{name}: 0 tokens (comment_line={:?})",
+                        def.comment_line
+                    ));
+                    continue;
+                }
+                let mut saw_structure = false;
+                for i in 0..count as usize {
+                    let t = &*toks.add(i);
+                    // Comment(4) Keyword(1) Type(2) Str(3) Number(5) Operator(6) Function(7) Preproc(8)
+                    if matches!(t.scope, 1 | 2 | 3 | 4 | 5 | 7 | 8) {
+                        saw_structure = true;
+                        break;
+                    }
+                }
+                npp_tokens_free(toks, count);
+                if !saw_structure {
+                    failures.push(format!(
+                        "{name}: only operators/default — weak highlight for sample"
+                    ));
+                }
+            }
+            npp_engine_destroy(eng);
+        }
+
+        if !failures.is_empty() {
+            panic!(
+                "highlight audit failures ({}):\n{}",
+                failures.len(),
+                failures.join("\n")
+            );
+        }
+    }
+
 }

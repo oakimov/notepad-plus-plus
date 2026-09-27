@@ -11,6 +11,7 @@ final class FunctionListPanel: NSView, NSTableViewDataSource, NSTableViewDelegat
     private let table = NSTableView()
     private let scroll = NSScrollView()
     private var symbols: [FunctionSymbol] = []
+    private var headerLabel: NSTextField!
     var onJump: ((Int) -> Void)?
 
     override init(frame frameRect: NSRect) {
@@ -18,10 +19,10 @@ final class FunctionListPanel: NSView, NSTableViewDataSource, NSTableViewDelegat
         wantsLayer = true
         layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
 
-        let header = NSTextField(labelWithString: "Function List")
-        header.font = NSFont.boldSystemFont(ofSize: 11)
-        header.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(header)
+        headerLabel = NSTextField(labelWithString: "Function List")
+        headerLabel.font = NSFont.boldSystemFont(ofSize: 11)
+        headerLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(headerLabel)
 
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
         col.title = "Symbol"
@@ -43,19 +44,41 @@ final class FunctionListPanel: NSView, NSTableViewDataSource, NSTableViewDelegat
         addSubview(scroll)
 
         NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: topAnchor, constant: 6),
-            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            scroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 4),
+            headerLabel.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            headerLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            scroll.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: 4),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
             widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
         ])
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(nativeLangDidChange(_:)),
+            name: NativeLang.didChangeNotification,
+            object: nil
+        )
+        applyLocalizedStrings()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) is not supported")
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func nativeLangDidChange(_ note: Notification) {
+        applyLocalizedStrings()
+    }
+
+    private func applyLocalizedStrings() {
+        headerLabel.stringValue = NativeLang.sectionString(
+            section: "FunctionList", tag: "PanelTitle", fallback: "Function List"
+        )
     }
 
     func reload(text: String, language: String) {

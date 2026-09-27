@@ -121,6 +121,25 @@ final class MainWindowControllerTests: XCTestCase {
         wc.close()
     }
 
+    func testXmlHighlightColorsTags() throws {
+        let wc = MainWindowController(documents: DocumentStore())
+        let url = try write("t.xml", "<root attr=\"v\">text</root>\n")
+        wc.openPaths([url.path])
+        spin()
+        let tv = try textView(of: wc)
+        XCTAssertTrue(tv.isRichText, "syntax colors require isRichText")
+        let storage = try XCTUnwrap(tv.textStorage)
+        // 'r' of <root — tag name should not match plain body text color at "text"
+        let tagColor = storage.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor
+        let bodyIdx = (tv.string as NSString).range(of: "text").location
+        XCTAssertNotEqual(bodyIdx, NSNotFound)
+        let bodyColor = storage.attribute(.foregroundColor, at: bodyIdx, effectiveRange: nil) as? NSColor
+        XCTAssertNotNil(tagColor)
+        XCTAssertNotNil(bodyColor)
+        XCTAssertFalse(tagColor!.isEqual(bodyColor), "tag and body text must differ")
+        wc.close()
+    }
+
     /// Renders the window to `$NPP_SNAPSHOT` for manual layout review.
     func testSnapshotWhenRequested() throws {
         guard let out = ProcessInfo.processInfo.environment["NPP_SNAPSHOT"] else { throw XCTSkip("NPP_SNAPSHOT unset") }

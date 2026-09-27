@@ -46,8 +46,13 @@ final class MainWindowController: NSWindowController {
     private var highlightWorkItem: DispatchWorkItem?
     /// Set once the user resolved every unsaved document for window close / quit.
     private var closeConfirmed = false
+    /// Pending SCN_MODIFIED payload captured in `shouldChangeTextIn` (UTF-8 offsets).
+    private var pendingPluginEdit: (position: Int, length: Int, linesAdded: Int, modType: Int32)?
 
     private static let defaultFontSize: CGFloat = 13
+
+    /// Exposed for `NPPM_MENUCOMMAND` / `IDM_EDIT_SELECTALL`.
+    var editorTextViewForPlugins: NSTextView { textView }
 
     private var editorFont: NSFont {
         NSFont.monospacedSystemFont(ofSize: editorFontSize, weight: .regular)
@@ -88,12 +93,18 @@ final class MainWindowController: NSWindowController {
         )
         startDiskWatchIfNeeded()
         applyThemeFromPrefs()
+        PluginRuntime.shared.menuTarget = self
+        PluginRuntime.shared.syncFromStore(selectedIndex: store.selectedIndex)
+        PluginRuntime.shared.notifyReady()
         refresh()
     }
 
     deinit {
         diskWatchTimer?.invalidate()
         NotificationCenter.default.removeObserver(self)
+        if PluginRuntime.shared.menuTarget === self {
+            PluginRuntime.shared.menuTarget = nil
+        }
     }
 
     @available(*, unavailable)
@@ -123,9 +134,12 @@ final class MainWindowController: NSWindowController {
             .foregroundColor: NSColor.textColor,
         ]
         tv.allowsUndo = true
-        tv.isRichText = false
+        // Required for syntax-highlight colors; keep rich-text chrome disabled below.
+        tv.isRichText = true
         tv.importsGraphics = false
         tv.usesFontPanel = false
+        tv.usesInspectorBar = false
+        tv.usesRuler = false
         tv.isAutomaticQuoteSubstitutionEnabled = false
         tv.isAutomaticDashSubstitutionEnabled = false
         tv.isAutomaticTextReplacementEnabled = false
@@ -267,8 +281,12 @@ final class MainWindowController: NSWindowController {
     /// Load the selected document into the editor and redraw tabs/title/status.
     private func refresh() {
         tabBar?.reload()
+        let idx = store.selectedIndex
+        if idx >= 0 {
+            PluginRuntime.shared.notifyBufferActivated(bufferId: UInt64(idx))
+        }
         guard let meta = store.selectedMeta() else { return }
-        let body = store.text(at: store.selectedIndex)
+        let body = store.text(at: idx)
         if textView.string != body {
             syncingText = true
             textView.breakUndoCoalescing()
@@ -299,8 +317,10 @@ final class MainWindowController: NSWindowController {
         let lines = text.utf8.lazy.filter { $0 == UInt8(ascii: "\n") }.count + 1
         let caret = textView.selectedRange().location
         let (ln, col) = lineColumn(at: caret, in: text)
+        let carets = textView.caretCount
+        let caretPart = carets > 1 ? ", \(carets) carets" : ""
         statusLabel.stringValue =
-            "Ln \(ln), Col \(col) — \(lines) lines — \(encoding) — \(eol) — \(language)"
+            "Ln \(ln), Col \(col)\(caretPart) — \(lines) lines — \(encoding) — \(eol) — \(language)"
     }
 
     private func lineColumn(at utf16: Int, in text: String) -> (Int, Int) {
@@ -355,12 +375,15 @@ final class MainWindowController: NSWindowController {
     private func applyHighlight() {
         guard let meta = store.selectedMeta(), let storage = textView.textStorage else { return }
         let text = textView.string
-        if text.isEmpty || text.utf8.count > 512 * 1024 { return }
+        if text.isEmpty || text.utf8.count > 2 * 1024 * 1024 { return }
         let tokens = store.highlight(language: meta.language, text: text)
         let full = NSRange(location: 0, length: storage.length)
+        let baseFg = store.editorThemeColors().fg ?? NSColor.textColor
         storage.beginEditing()
-        storage.setAttributes([.font: editorFont, .foregroundColor: NSColor.textColor], range: full)
-        for t in tokens {
+        storage.setAttributes([.font: editorFont, .foregroundColor: baseFg], range: full)
+        // Longer spans first so nested tokens (e.g. HTML inside XML CDATA) win.
+        let ordered = tokens.sorted { $0.range.length > $1.range.length }
+        for t in ordered {
             let end = NSMaxRange(t.range)
             guard t.range.location >= 0, end <= storage.length else { continue }
             let color = store.color(forScope: t.scope, language: meta.language)
@@ -431,8 +454,11 @@ final class MainWindowController: NSWindowController {
     private func closeTab(at index: Int, done: ((Bool) -> Void)? = nil) {
         syncEditorToStore()
         guard (0..<store.count).contains(index), window?.attachedSheet == nil else { done?(false); return }
+        let bufferId = UInt64(index)
         guard store.isDirty(at: index) else {
+            PluginRuntime.shared.notifyFileBeforeClose(bufferId: bufferId)
             store.close(at: index)
+            PluginRuntime.shared.notifyFileClosed(bufferId: bufferId)
             refresh()
             done?(true)
             return
@@ -442,7 +468,9 @@ final class MainWindowController: NSWindowController {
         promptToSave(at: index) { [weak self] outcome in
             guard let self else { return }
             guard outcome != .cancelled else { done?(false); return }
+            PluginRuntime.shared.notifyFileBeforeClose(bufferId: bufferId)
             self.store.close(at: index)
+            PluginRuntime.shared.notifyFileClosed(bufferId: bufferId)
             self.refresh()
             done?(true)
         }
@@ -490,6 +518,8 @@ final class MainWindowController: NSWindowController {
     @objc func fileNew(_ sender: Any?) {
         syncEditorToStore()
         store.newDocument()
+        let buf = UInt64(store.selectedIndex)
+        PluginRuntime.shared.notifyFileOpened(bufferId: buf)
         refresh()
     }
 
@@ -534,6 +564,7 @@ final class MainWindowController: NSWindowController {
             if store.openDocument(url: url) {
                 if replaceFresh { store.close(at: 0) }
                 SessionStore.pushRecent(url.path)
+                PluginRuntime.shared.notifyFileOpened(bufferId: UInt64(store.selectedIndex))
             } else {
                 failed.append(url.lastPathComponent)
             }
@@ -598,8 +629,11 @@ final class MainWindowController: NSWindowController {
         syncEditorToStore()
         for (i, doc) in store.tabs.enumerated() where doc.isDirty {
             guard doc.fileURL != nil else { continue }
+            let bufferId = UInt64(i)
+            PluginRuntime.shared.notifyFileBeforeSave(bufferId: bufferId)
             do {
                 try store.save(at: i)
+                PluginRuntime.shared.notifyFileSaved(bufferId: bufferId)
             } catch {
                 presentError(error)
                 break
@@ -706,6 +740,8 @@ final class MainWindowController: NSWindowController {
             runSavePanel(for: index, done: done)
             return
         }
+        let bufferId = UInt64(index)
+        PluginRuntime.shared.notifyFileBeforeSave(bufferId: bufferId)
         do {
             if let url = store.tabs[index].fileURL {
                 maybeBackup(url)
@@ -717,6 +753,7 @@ final class MainWindowController: NSWindowController {
             }
             persistSession()
             MenuBuilder.reloadRecentFiles(target: self)
+            PluginRuntime.shared.notifyFileSaved(bufferId: bufferId)
             done(true)
         } catch {
             presentError(error)
@@ -756,6 +793,8 @@ final class MainWindowController: NSWindowController {
         panel.nameFieldStringValue = store.title(at: index)
         let handler: (NSApplication.ModalResponse) -> Void = { [weak self] result in
             guard let self, result == .OK, let url = panel.url else { done(false); return }
+            let bufferId = UInt64(index)
+            PluginRuntime.shared.notifyFileBeforeSave(bufferId: bufferId)
             do {
                 // Save As: no prior file to back up at dest.
                 try self.store.save(at: index, to: url)
@@ -763,6 +802,7 @@ final class MainWindowController: NSWindowController {
                 self.knownMtimes[url.path] = Self.mtime(of: url)
                 self.persistSession()
                 MenuBuilder.reloadRecentFiles(target: self)
+                PluginRuntime.shared.notifyFileSaved(bufferId: bufferId)
                 done(true)
             } catch {
                 self.presentError(error)
@@ -825,8 +865,8 @@ final class MainWindowController: NSWindowController {
         columnMode.toggle()
         textView.columnModeEnabled = columnMode
         statusLabel.stringValue = columnMode
-            ? "Column Mode ON — Option-drag or drag to select a rectangle"
-            : "Column Mode OFF"
+            ? "Column Mode ON — Option-drag rectangle; Cmd-click adds carets"
+            : "Column Mode OFF — Cmd-click adds carets; Esc clears"
     }
 
     @objc func editToggleComment(_ sender: Any?) {
@@ -1481,6 +1521,10 @@ final class MainWindowController: NSWindowController {
         StyleConfiguratorWindow.show()
     }
 
+    @objc func openShortcutMapper(_ sender: Any?) {
+        ShortcutMapperWindow.show()
+    }
+
     @objc func themeSelect(_ sender: Any?) {
         guard let item = sender as? NSMenuItem else { return }
         let name = (item.representedObject as? String) ?? ""
@@ -1784,6 +1828,9 @@ final class MainWindowController: NSWindowController {
 
     @objc func pluginsRefresh(_ sender: Any?) {
         MenuBuilder.reloadPlugins(target: self)
+        PluginRuntime.shared.menuTarget = self
+        PluginRuntime.shared.syncFromStore(selectedIndex: store.selectedIndex)
+        PluginRuntime.shared.notifyReady()
         let n = PluginRuntime.shared.loaded.count
         let cmds = PluginRuntime.shared.loaded.reduce(0) { $0 + $1.commands.count }
         statusLabel.stringValue = "Plugins: \(n) loaded, \(cmds) commands"
@@ -1812,6 +1859,17 @@ final class MainWindowController: NSWindowController {
 extension MainWindowController: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
         guard !syncingText else { return }
+        if let edit = pendingPluginEdit {
+            pendingPluginEdit = nil
+            let buf = UInt64(max(0, store.selectedIndex))
+            PluginRuntime.shared.notifyModified(
+                bufferId: buf,
+                position: edit.position,
+                length: edit.length,
+                linesAdded: edit.linesAdded,
+                modificationType: edit.modType
+            )
+        }
         editorNeedsSync = true
         if macroRecording {
             // Best-effort: record the last typed character(s) via change count is hard;
@@ -1822,9 +1880,41 @@ extension MainWindowController: NSTextViewDelegate {
         scheduleHighlight()
     }
 
+    func textViewDidChangeSelection(_ notification: Notification) {
+        guard !syncingText, let meta = store.selectedMeta() else { return }
+        updateChrome(
+            title: meta.title,
+            isDirty: meta.isDirty || editorNeedsSync,
+            encoding: meta.encodingLabel,
+            language: meta.languageDisplay,
+            eol: meta.eolLabel
+        )
+    }
+
     func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
         if macroRecording, let replacementString, !replacementString.isEmpty {
             recordMacroInsert(replacementString)
+        }
+        if !syncingText {
+            let s = textView.string as NSString
+            let deleted = s.substring(with: affectedCharRange)
+            let inserted = replacementString ?? ""
+            let utf8Pos = (s.substring(to: affectedCharRange.location) as String).utf8.count
+            let delBytes = deleted.utf8.count
+            let insBytes = inserted.utf8.count
+            let delLines = deleted.reduce(0) { $0 + ($1 == "\n" ? 1 : 0) }
+            let insLines = inserted.reduce(0) { $0 + ($1 == "\n" ? 1 : 0) }
+            var mod: Int32 = 0
+            if delBytes > 0 { mod |= NppMod.deleteText }
+            if insBytes > 0 { mod |= NppMod.insertText }
+            if mod != 0 {
+                pendingPluginEdit = (
+                    position: utf8Pos,
+                    length: max(delBytes, insBytes),
+                    linesAdded: insLines - delLines,
+                    modType: mod
+                )
+            }
         }
         return true
     }

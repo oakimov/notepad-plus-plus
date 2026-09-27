@@ -2,8 +2,10 @@
 //!
 //! Cached grammars (offline build) cover rust/python/javascript/typescript/
 //! go/java/ruby/html/css/json/toml/xml/yaml. Languages without a grammar
-//! tokenize via keyword lists + comment/string scanners from `langs.model.xml`,
-//! styled by `stylers.model.xml` colors.
+//! tokenize via keyword lists + comment/string/number/operator scanners from
+//! `langs.model.xml`, styled by `stylers.model.xml` colors.
+
+mod queries;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -294,42 +296,42 @@ fn language_grammar(lang: &str) -> Option<tree_sitter::Language> {
 }
 
 fn scope_for_capture(name: &str) -> Scope {
-    match name {
-        "keyword" | "keyword.control" | "keyword.operator" | "include" => Scope::Keyword,
-        "type" | "type.builtin" | "constructor" => Scope::Type,
-        "string" | "character" => Scope::Str,
+    let base = name.split('.').next().unwrap_or(name);
+    match base {
+        // Tags share Keyword so XML/HTML styler "TAG" (blue) applies.
+        "keyword" | "include" | "tag" => Scope::Keyword,
+        // Attributes / CSS properties share Type so "ATTRIBUTE" styler applies.
+        "type" | "constructor" | "property" | "attribute" => Scope::Type,
+        "string" | "character" | "escape" => Scope::Str,
         "comment" => Scope::Comment,
         "number" | "boolean" | "constant" => Scope::Number,
         "operator" | "punctuation" => Scope::Operator,
-        "function" | "function.call" | "method" => Scope::Function,
-        "preproc" | "attribute" | "tag" => Scope::Preproc,
+        "function" | "method" => Scope::Function,
+        "preproc" | "label" => Scope::Preproc,
         _ => Scope::Default,
     }
 }
 
 /// Per-grammar queries: node names differ across grammars.
 fn query_for(lang: &str) -> &'static str {
-    match grammar_key(lang) {
-        "rust" => r#"(string_literal) @string (line_comment) @comment (block_comment) @comment"#,
-        "python" | "javascript" | "json" | "yaml" | "html" | "css" | "xml" => {
-            r#"(string) @string (comment) @comment"#
-        }
-        "typescript" => r#"(string) @string (comment) @comment"#,
-        "go" => {
-            r#"(interpreted_string_literal) @string (raw_string_literal) @string (comment) @comment"#
-        }
-        "java" => {
-            r#"(string_literal) @string (line_comment) @comment (block_comment) @comment"#
-        }
-        "ruby" => r#"(string) @string (comment) @comment"#,
-        "toml" => r#"(string) @string (comment) @comment"#,
-        _ => r#"(string) @string (comment) @comment"#,
-    }
+    queries::query_source(grammar_key(lang))
 }
 
 /// Highlight with tree-sitter when a grammar exists, else `None`.
+/// Falls back to `None` if the query fails to compile for the linked grammar.
+///
+/// For XML, HTML nested inside `<![CDATA[...]]>` is highlighted with the HTML
+/// grammar (appcasts / feeds store HTML release notes there).
 #[must_use]
 pub fn highlight_tree_sitter(lang: &str, text: &str) -> Option<Vec<Token>> {
+    let mut out = highlight_tree_sitter_raw(lang, text)?;
+    if grammar_key(lang) == "xml" {
+        out = overlay_cdata_html(text, out);
+    }
+    Some(out)
+}
+
+fn highlight_tree_sitter_raw(lang: &str, text: &str) -> Option<Vec<Token>> {
     let grammar = language_grammar(lang)?;
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&grammar).ok()?;
@@ -343,15 +345,88 @@ pub fn highlight_tree_sitter(lang: &str, text: &str) -> Option<Vec<Token>> {
         for cap in m.captures {
             let node = cap.node;
             let name = query.capture_names()[cap.index as usize];
+            let scope = scope_for_capture(name);
+            if scope == Scope::Default {
+                continue;
+            }
             out.push(Token {
                 start: node.start_byte(),
                 end: node.end_byte(),
-                scope: scope_for_capture(name),
+                scope,
             });
         }
     }
     out.sort_by_key(|t| (t.start, t.end));
     Some(out)
+}
+
+/// `<![CDATA[ ... ]]>` content starts/ends (byte offsets of the inner slice).
+fn cdata_inner_ranges(text: &str) -> Vec<(usize, usize)> {
+    const OPEN: &[u8] = b"<![CDATA[";
+    const CLOSE: &[u8] = b"]]>";
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + OPEN.len() <= bytes.len() {
+        if &bytes[i..i + OPEN.len()] == OPEN {
+            let content_start = i + OPEN.len();
+            let mut j = content_start;
+            while j + CLOSE.len() <= bytes.len() && &bytes[j..j + CLOSE.len()] != CLOSE {
+                j += 1;
+            }
+            let content_end = if j + CLOSE.len() <= bytes.len() {
+                j
+            } else {
+                bytes.len()
+            };
+            out.push((content_start, content_end));
+            i = content_end + CLOSE.len().min(bytes.len().saturating_sub(content_end));
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
+fn overlay_cdata_html(text: &str, base: Vec<Token>) -> Vec<Token> {
+    let mut out = base;
+    for (cs, ce) in cdata_inner_ranges(text) {
+        // Delimiters: color `<![CDATA[` / `]]>` as preprocessor.
+        let open_start = cs.saturating_sub(9); // len("<![CDATA[")
+        if open_start < cs {
+            out.push(Token {
+                start: open_start,
+                end: cs,
+                scope: Scope::Preproc,
+            });
+        }
+        if ce + 3 <= text.len() && text.as_bytes()[ce..ce + 3] == *b"]]>" {
+            out.push(Token {
+                start: ce,
+                end: ce + 3,
+                scope: Scope::Preproc,
+            });
+        }
+        if cs >= ce {
+            continue;
+        }
+        let inner = &text[cs..ce];
+        if let Some(html_toks) = highlight_tree_sitter_raw("html", inner) {
+            for t in html_toks {
+                out.push(Token {
+                    start: t.start + cs,
+                    end: t.end + cs,
+                    scope: t.scope,
+                });
+            }
+        }
+    }
+    out.sort_by_key(|t| (t.start, t.end));
+    // Drop earlier tokens fully covered by a later more-specific span? Keep all;
+    // Swift paints in order so later addAttribute wins for overlaps — apply
+    // shorter/inner tokens last by sorting end-start descending within same start.
+    out.sort_by(|a, b| a.start.cmp(&b.start).then_with(|| b.end.cmp(&a.end)));
+    out
 }
 
 /// Merge overlay tokens into base; base ranges win on overlap.
@@ -372,7 +447,17 @@ pub fn merge_tokens(base: Vec<Token>, overlay: Vec<Token>) -> Vec<Token> {
 }
 
 /// Keyword tokenizer from `langs.model.xml` word lists.
-/// Matching is ASCII word-boundary; skips ranges covered by `exclude`.
+fn is_ident_start(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_'
+}
+
+/// Continue identifier: alnum / `_` / `-` (COBOL `PROGRAM-ID`, CSS vendor tokens).
+fn is_ident_continue(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_' || c == b'-'
+}
+
+/// Matching is ASCII word-boundary (case-insensitive); skips ranges covered by `exclude`.
+/// Keyword sets from [`groups_from_keywords`] are stored lowercased.
 #[must_use]
 pub fn highlight_keywords(
     text: &str,
@@ -388,17 +473,22 @@ pub fn highlight_keywords(
             continue;
         }
         let c = bytes[i];
-        if c.is_ascii_alphanumeric() || c == b'_' {
+        if is_ident_start(c) {
             let start = i;
-            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+            i += 1;
+            while i < bytes.len() && is_ident_continue(bytes[i]) {
                 i += 1;
+            }
+            // Trim trailing `-` so `foo-` / `a - b` edge cases don't swallow ops.
+            while i > start + 1 && bytes[i - 1] == b'-' {
+                i -= 1;
             }
             if exclude.iter().any(|&(a, b)| start < b && i > a) {
                 continue;
             }
-            let word = &text[start..i];
+            let word = text[start..i].to_ascii_lowercase();
             for (scope, set) in groups {
-                if set.contains(word) {
+                if set.contains(&word) {
                     out.push(Token {
                         start,
                         end: i,
@@ -436,6 +526,29 @@ pub fn scan_comments_and_strings(
         {
             let start = i;
             i += line_pat.len();
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            out.push(Token {
+                start,
+                end: i,
+                scope: Scope::Comment,
+            });
+            continue;
+        }
+        // Fixed-form COBOL: `*` after only spaces on the line (commentLine is `*>`).
+        if line_pat == b"*>"
+            && bytes[i] == b'*'
+            && (i == 0 || bytes[i - 1] == b'\n' || {
+                let mut j = i;
+                while j > 0 && bytes[j - 1] == b' ' {
+                    j -= 1;
+                }
+                j == 0 || bytes[j - 1] == b'\n'
+            })
+        {
+            let start = i;
+            i += 1;
             while i < bytes.len() && bytes[i] != b'\n' {
                 i += 1;
             }
@@ -524,7 +637,193 @@ pub fn scan_comments_and_strings(
     out
 }
 
-/// Full keyword-language highlight: comments/strings + keywords outside them.
+fn in_exclude(i: usize, exclude: &[(usize, usize)]) -> bool {
+    exclude.iter().any(|&(a, b)| i >= a && i < b)
+}
+
+fn overlaps_exclude(start: usize, end: usize, exclude: &[(usize, usize)]) -> bool {
+    exclude.iter().any(|&(a, b)| start < b && end > a)
+}
+
+/// Scan integer / float / hex / binary literals outside `exclude` ranges.
+#[must_use]
+pub fn scan_numbers(text: &str, exclude: &[(usize, usize)]) -> Vec<Token> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if in_exclude(i, exclude) {
+            i += 1;
+            continue;
+        }
+        let c = bytes[i];
+        // Hex / binary / octal prefixes
+        if c == b'0' && i + 2 < bytes.len() && !in_exclude(i + 1, exclude) {
+            let p = bytes[i + 1].to_ascii_lowercase();
+            if p == b'x' || p == b'b' || p == b'o' {
+                let start = i;
+                i += 2;
+                while i < bytes.len()
+                    && (bytes[i].is_ascii_hexdigit() || bytes[i] == b'_')
+                    && !in_exclude(i, exclude)
+                {
+                    i += 1;
+                }
+                if i > start + 2 && !overlaps_exclude(start, i, exclude) {
+                    out.push(Token {
+                        start,
+                        end: i,
+                        scope: Scope::Number,
+                    });
+                }
+                continue;
+            }
+        }
+        if c.is_ascii_digit() {
+            // Don't treat digits mid-identifier as numbers.
+            if i > 0 {
+                let prev = bytes[i - 1];
+                if prev.is_ascii_alphabetic() || prev == b'_' {
+                    i += 1;
+                    continue;
+                }
+            }
+            let start = i;
+            i += 1;
+            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'_') {
+                i += 1;
+            }
+            if i < bytes.len() && bytes[i] == b'.' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit()
+            {
+                i += 1;
+                while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'_') {
+                    i += 1;
+                }
+            }
+            // Exponent
+            if i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
+                let mut j = i + 1;
+                if j < bytes.len() && (bytes[j] == b'+' || bytes[j] == b'-') {
+                    j += 1;
+                }
+                if j < bytes.len() && bytes[j].is_ascii_digit() {
+                    i = j;
+                    while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'_') {
+                        i += 1;
+                    }
+                }
+            }
+            // Suffix letters (u, l, f, etc.)
+            while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+                i += 1;
+            }
+            if !overlaps_exclude(start, i, exclude) {
+                out.push(Token {
+                    start,
+                    end: i,
+                    scope: Scope::Number,
+                });
+            }
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Multi-char then single-char operators outside `exclude`.
+#[must_use]
+pub fn scan_operators(text: &str, exclude: &[(usize, usize)]) -> Vec<Token> {
+    const MULTI: &[&[u8]] = &[
+        b"<<=", b">>=", b">>>", b"===", b"!==", b"<=>", b"...", b"??=", b"&&=", b"||=", b"**=",
+        b"<<=", b">>=", b"<<", b">>", b"==", b"!=", b"<=", b">=", b"&&", b"||", b"??", b"?.",
+        b"+=", b"-=", b"*=", b"/=", b"%=", b"&=", b"|=", b"^=", b"->", b"=>", b"::", b"++", b"--",
+        b":=", b"<-", b"**", b"//",
+    ];
+    const SINGLE: &[u8] = b"+-*/%=<>!&|^~?:.";
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if in_exclude(i, exclude) {
+            i += 1;
+            continue;
+        }
+        let mut matched = false;
+        for op in MULTI {
+            if i + op.len() <= bytes.len() && &bytes[i..i + op.len()] == *op {
+                // Avoid treating // as operator when it's a line comment start —
+                // those ranges should already be excluded.
+                let end = i + op.len();
+                if !overlaps_exclude(i, end, exclude) {
+                    out.push(Token {
+                        start: i,
+                        end,
+                        scope: Scope::Operator,
+                    });
+                }
+                i = end;
+                matched = true;
+                break;
+            }
+        }
+        if matched {
+            continue;
+        }
+        if SINGLE.contains(&bytes[i]) {
+            out.push(Token {
+                start: i,
+                end: i + 1,
+                scope: Scope::Operator,
+            });
+            i += 1;
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
+/// C-like `#directive` at line start (after whitespace), outside `exclude`.
+#[must_use]
+pub fn scan_preproc(text: &str, exclude: &[(usize, usize)]) -> Vec<Token> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    let mut line_start = true;
+    while i < bytes.len() {
+        if bytes[i] == b'\n' {
+            line_start = true;
+            i += 1;
+            continue;
+        }
+        if line_start {
+            while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+                i += 1;
+            }
+            if i < bytes.len() && bytes[i] == b'#' && !in_exclude(i, exclude) {
+                let start = i;
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                if !overlaps_exclude(start, i, exclude) {
+                    out.push(Token {
+                        start,
+                        end: i,
+                        scope: Scope::Preproc,
+                    });
+                }
+                line_start = false;
+                continue;
+            }
+            line_start = false;
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Full keyword-language highlight: comments/strings + numbers/ops/preproc + keywords.
 #[must_use]
 pub fn highlight_keyword_lang(
     text: &str,
@@ -534,9 +833,33 @@ pub fn highlight_keyword_lang(
     groups: &[(Scope, &BTreeSet<String>)],
 ) -> Vec<Token> {
     let structural = scan_comments_and_strings(text, comment_line, comment_start, comment_end);
-    let exclude: Vec<(usize, usize)> = structural.iter().map(|t| (t.start, t.end)).collect();
+    let mut exclude: Vec<(usize, usize)> = structural.iter().map(|t| (t.start, t.end)).collect();
+    let mut out = structural;
+
+    let nums = scan_numbers(text, &exclude);
+    for t in &nums {
+        exclude.push((t.start, t.end));
+    }
+    out = merge_tokens(out, nums);
+
+    // Preproc before operators so `#include <foo>` is one directive, not ops.
+    if comment_line != "#" {
+        let pp = scan_preproc(text, &exclude);
+        for t in &pp {
+            exclude.push((t.start, t.end));
+        }
+        out = merge_tokens(out, pp);
+    }
+
+    // Keywords before operators so `PROGRAM-ID` / `working-storage` keep their hyphens.
     let kws = highlight_keywords(text, groups, &exclude);
-    merge_tokens(structural, kws)
+    for t in &kws {
+        exclude.push((t.start, t.end));
+    }
+    out = merge_tokens(out, kws);
+
+    let ops = scan_operators(text, &exclude);
+    merge_tokens(out, ops)
 }
 
 /// Build keyword groups from a parsed `langs.model.xml` entry:
@@ -555,30 +878,187 @@ pub fn groups_from_keywords(
         } else {
             continue;
         };
-        set.extend(words.split_whitespace().map(str::to_owned));
+        set.extend(
+            words
+                .split_whitespace()
+                .map(|w| w.to_ascii_lowercase()),
+        );
     }
     vec![(Scope::Keyword, kw), (Scope::Type, ty)]
+}
+
+/// Line-oriented diff / patch highlighting (`---`, `+++`, `@@`, `+`/`-` lines).
+#[must_use]
+pub fn scan_diff(text: &str) -> Vec<Token> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let line_start = i;
+        while i < bytes.len() && bytes[i] != b'\n' {
+            i += 1;
+        }
+        let line_end = i;
+        if i < bytes.len() {
+            i += 1; // skip '\n'
+        }
+        if line_end <= line_start {
+            continue;
+        }
+        let line = &bytes[line_start..line_end];
+        let scope = if line.starts_with(b"diff ")
+            || line.starts_with(b"index ")
+            || line.starts_with(b"---")
+            || line.starts_with(b"+++")
+        {
+            // HEADER / COMMAND
+            Some(Scope::Preproc)
+        } else if line.starts_with(b"@@") {
+            Some(Scope::Number)
+        } else if line.starts_with(b"\\") {
+            Some(Scope::Comment)
+        } else if line.first() == Some(&b'-') {
+            Some(Scope::Type) // DELETED
+        } else if line.first() == Some(&b'+') {
+            Some(Scope::Keyword) // ADDED
+        } else {
+            None
+        };
+        if let Some(scope) = scope {
+            out.push(Token {
+                start: line_start,
+                end: line_end,
+                scope,
+            });
+        }
+    }
+    out
+}
+
+/// TeX / LaTeX: `\`commands as keywords (comments via `%` commentLine).
+#[must_use]
+pub fn scan_tex_commands(text: &str, exclude: &[(usize, usize)]) -> Vec<Token> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if in_exclude(i, exclude) {
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            let start = i;
+            i += 1;
+            if bytes[i].is_ascii_alphabetic() {
+                while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+                    i += 1;
+                }
+            } else {
+                // Short command: `\{`, `\%`, `\\`, etc.
+                i += 1;
+            }
+            if !overlaps_exclude(start, i, exclude) {
+                out.push(Token {
+                    start,
+                    end: i,
+                    scope: Scope::Keyword,
+                });
+            }
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Extra scanners for langs that need more than keywords + comments.
+#[must_use]
+pub fn highlight_special(lang: &str, text: &str) -> Option<Vec<Token>> {
+    match grammar_key(lang) {
+        "diff" => Some(scan_diff(text)),
+        "latex" | "tex" => {
+            // Comments first via `%`, then commands.
+            let comments = scan_comments_and_strings(text, "%", "", "");
+            let exclude: Vec<(usize, usize)> =
+                comments.iter().map(|t| (t.start, t.end)).collect();
+            let cmds = scan_tex_commands(text, &exclude);
+            Some(merge_tokens(comments, cmds))
+        }
+        _ => None,
+    }
 }
 
 /// Map a styler `WordsStyle` name to a [`Scope`].
 #[must_use]
 pub fn scope_from_style_name(name: &str) -> Option<Scope> {
     let u = name.to_ascii_uppercase();
-    if u.contains("INSTRUCTION") || u == "KEYWORD" || u.contains("KEYWORD1") {
-        Some(Scope::Keyword)
-    } else if u.contains("TYPE") {
+    // Markup lexers (XML/HTML): TAG / ATTRIBUTE before generic TYPE (DOCTYPE contains "TYPE").
+    if u.contains("ATTRIBUTE") {
         Some(Scope::Type)
-    } else if u.contains("STRING") || u.contains("CHARACTER") || u.contains("LITERAL") {
+    } else if u.contains("TAG") {
+        Some(Scope::Keyword)
+    } else if u.contains("INSTRUCTION")
+        || u == "KEYWORD"
+        || u.contains("KEYWORD1")
+        || u.contains("KEYWORD2")
+        || u.contains("KEYWORD3")
+        || u.contains("KEYWORD4")
+        || u.contains("KEYWORD5")
+        || u.contains("KEYWORD6")
+        || u == "WORD"
+        || u.contains("RESERVED")
+        || u == "COMMAND"
+        || u == "ADDED"
+    {
+        Some(Scope::Keyword)
+    } else if (u.contains("TYPE") && !u.contains("DOCTYPE"))
+        || u.contains("IDENTIFIER")
+        || u.contains("CLASSNAME")
+        || u.contains("CLASS NAME")
+        || u == "CLASS"
+        || u.contains("VARIABLE")
+        || u == "KEY"
+        || u.contains("ADDED KEY")
+        || u.contains("SCALAR")
+        || u.contains("LABEL")
+        || u.contains("PROPERTY")
+        || u == "DELETED"
+    {
+        Some(Scope::Type)
+    } else if u.contains("STRING")
+        || u.contains("CHARACTER")
+        || u.contains("LITERAL")
+        || u == "CDATA"
+        || u == "VALUE"
+        || u.contains("VERBATIM")
+        || u.contains("REGEX")
+        || u.contains("BACKTICK")
+    {
         Some(Scope::Str)
-    } else if u.contains("COMMENT") {
+    } else if u.contains("COMMENT") || u.contains("TASKMARKER") {
         Some(Scope::Comment)
-    } else if u.contains("NUMBER") {
+    } else if u.contains("NUMBER")
+        || u.contains("ENTITY")
+        || u.contains("DIGIT")
+        || u == "POSITION"
+    {
         Some(Scope::Number)
-    } else if u.contains("OPERATOR") {
+    } else if u.contains("OPERATOR")
+        || u.contains("XML START")
+        || u.contains("XML END")
+        || u.contains("SYMBOL")
+        || u.contains("PUNCTUATION")
+    {
         Some(Scope::Operator)
-    } else if u.contains("FUNCTION") || u.contains("METHOD") {
+    } else if u.contains("FUNCTION") || u.contains("METHOD") || u.contains("PROCEDURE") {
         Some(Scope::Function)
-    } else if u.contains("PREPROCESSOR") || u.contains("PREPROC") || u.contains("DIRECTIVE") {
+    } else if u.contains("PREPROCESSOR")
+        || u.contains("PREPROC")
+        || u.contains("DIRECTIVE")
+        || u.contains("#IFDEF")
+        || u.contains("SENDER")
+        || u == "HEADER"
+    {
         Some(Scope::Preproc)
     } else {
         None
@@ -616,6 +1096,67 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tree_sitter_rust_rich_scopes() {
+        let text = r#"
+/// doc
+fn main() {
+    // hi
+    let s = "x";
+    let n = 42;
+    foo(n);
+}
+"#;
+        let toks = highlight_tree_sitter("rust", text).expect("rust grammar + query");
+        assert!(toks.iter().any(|t| t.scope == Scope::Comment));
+        assert!(toks.iter().any(|t| t.scope == Scope::Str));
+        assert!(toks.iter().any(|t| t.scope == Scope::Keyword), "expected keywords: {toks:?}");
+        assert!(toks.iter().any(|t| t.scope == Scope::Number), "expected numbers: {toks:?}");
+        assert!(toks.iter().any(|t| t.scope == Scope::Function), "expected functions: {toks:?}");
+        for t in &toks {
+            assert!(text.is_char_boundary(t.start) && text.is_char_boundary(t.end));
+        }
+    }
+
+    #[test]
+    fn all_grammar_queries_compile() {
+        for lang in [
+            "rust",
+            "python",
+            "javascript",
+            "javascript.js",
+            "typescript",
+            "go",
+            "java",
+            "ruby",
+            "html",
+            "css",
+            "json",
+            "toml",
+            "xml",
+            "yaml",
+        ] {
+            let grammar = language_grammar(lang).unwrap_or_else(|| panic!("grammar {lang}"));
+            tree_sitter::Query::new(&grammar, query_for(lang))
+                .unwrap_or_else(|e| panic!("query compile failed for {lang}: {e}"));
+            // Smoke parse
+            let sample = match grammar_key(lang) {
+                "html" => "<div class=\"a\">x</div>",
+                "xml" => r#"<?xml version="1.0"?><root attr="v">t</root>"#,
+                "css" => "body { color: #fff; }",
+                "json" => r#"{"a": 1, "b": true}"#,
+                "toml" => "a = 1\n# c\n",
+                "yaml" => "a: 1\n# c\n",
+                _ => "fn main() { let x = 1; }\n",
+            };
+            let toks = highlight_tree_sitter(lang, sample).unwrap_or_else(|| panic!("hl {lang}"));
+            assert!(
+                !toks.is_empty() || sample.trim().is_empty(),
+                "{lang} produced no tokens for {sample:?}"
+            );
+        }
+    }
+
+    #[test]
     fn tree_sitter_rust_strings_and_comments() {
         let text = "fn main() {\n// hi\nlet s = \"x\";\n}\n";
         let toks = highlight_tree_sitter("rust", text).expect("rust grammar");
@@ -624,6 +1165,20 @@ mod tests {
         for t in &toks {
             assert!(text.is_char_boundary(t.start) && text.is_char_boundary(t.end));
         }
+    }
+
+    #[test]
+    fn keyword_fallback_cpp_numbers_and_preproc() {
+        let mut keywords = BTreeMap::new();
+        keywords.insert("instre1".into(), "int return if".into());
+        let groups = groups_from_keywords(&keywords);
+        let refs: Vec<(Scope, &BTreeSet<String>)> =
+            groups.iter().map(|(s, set)| (*s, set)).collect();
+        let text = "#include <stdio.h>\nint main() { return 42; }\n";
+        let toks = highlight_keyword_lang(text, "//", "/*", "*/", &refs);
+        assert!(toks.iter().any(|t| t.scope == Scope::Preproc));
+        assert!(toks.iter().any(|t| t.scope == Scope::Number));
+        assert!(toks.iter().any(|t| t.scope == Scope::Keyword));
     }
 
     #[test]
@@ -705,4 +1260,100 @@ mod tests {
     fn javascript_js_has_grammar() {
         assert!(has_grammar("javascript.js"));
     }
+
+    #[test]
+    fn xml_tags_use_keyword_attrs_use_type() {
+        let text = r#"<?xml version="1.0"?>
+<!-- c -->
+<root attr="v">text &amp; x</root>
+"#;
+        let toks = highlight_tree_sitter("xml", text).expect("xml");
+        assert!(toks.iter().any(|t| t.scope == Scope::Keyword)); // tag names + xml
+        assert!(toks.iter().any(|t| t.scope == Scope::Type)); // attr
+        assert!(toks.iter().any(|t| t.scope == Scope::Str)); // "v" / "1.0"
+        assert!(toks.iter().any(|t| t.scope == Scope::Comment));
+        assert!(toks.iter().any(|t| t.scope == Scope::Number)); // &amp;
+        // Element text must not be painted as strings.
+        assert!(!toks.iter().any(|t| {
+            t.scope == Scope::Str && text[t.start..t.end].contains("text")
+        }));
+        assert_eq!(scope_from_style_name("TAG"), Some(Scope::Keyword));
+        assert_eq!(scope_from_style_name("ATTRIBUTE"), Some(Scope::Type));
+        assert_eq!(scope_from_style_name("DOUBLE STRING"), Some(Scope::Str));
+        assert_eq!(scope_from_style_name("COMMAND"), Some(Scope::Keyword));
+        assert_eq!(scope_from_style_name("ADDED"), Some(Scope::Keyword));
+        assert_eq!(scope_from_style_name("DELETED"), Some(Scope::Type));
+        assert_eq!(scope_from_style_name("HEADER"), Some(Scope::Preproc));
+        assert_eq!(scope_from_style_name("POSITION"), Some(Scope::Number));
+    }
+
+    #[test]
+    fn keywords_match_case_insensitively_and_hyphens() {
+        let mut keywords = BTreeMap::new();
+        keywords.insert(
+            "instre1".into(),
+            "select from where program-id identification".into(),
+        );
+        let groups = groups_from_keywords(&keywords);
+        let refs: Vec<(Scope, &BTreeSet<String>)> =
+            groups.iter().map(|(s, set)| (*s, set)).collect();
+        let text = "SELECT * FROM t WHERE id=1;\nPROGRAM-ID. HELLO.\n";
+        let toks = highlight_keywords(text, &refs, &[]);
+        assert!(toks.iter().any(|t| text[t.start..t.end] == *"SELECT"));
+        assert!(toks.iter().any(|t| text[t.start..t.end] == *"FROM"));
+        assert!(toks.iter().any(|t| text[t.start..t.end] == *"WHERE"));
+        assert!(toks.iter().any(|t| text[t.start..t.end] == *"PROGRAM-ID"));
+    }
+
+    #[test]
+    fn diff_and_latex_special_scanners() {
+        let diff = "--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new\n";
+        let d = highlight_special("diff", diff).expect("diff");
+        assert!(d.iter().any(|t| t.scope == Scope::Preproc));
+        assert!(d.iter().any(|t| t.scope == Scope::Number));
+        assert!(d.iter().any(|t| t.scope == Scope::Type && diff[t.start..t.end].starts_with('-')));
+        assert!(d.iter().any(|t| t.scope == Scope::Keyword && diff[t.start..t.end].starts_with('+')));
+
+        let tex = "% c\n\\begin{document}\nHello \\textbf{x}\n";
+        let t = highlight_special("latex", tex).expect("latex");
+        assert!(t.iter().any(|t| t.scope == Scope::Comment));
+        assert!(t.iter().any(|t| tex[t.start..t.end] == *"\\begin"));
+        assert!(t.iter().any(|t| tex[t.start..t.end] == *"\\textbf"));
+    }
+
+    #[test]
+    fn cobol_fixed_form_star_comment() {
+        let mut keywords = BTreeMap::new();
+        keywords.insert("instre1".into(), "division identification".into());
+        let groups = groups_from_keywords(&keywords);
+        let refs: Vec<(Scope, &BTreeSet<String>)> =
+            groups.iter().map(|(s, set)| (*s, set)).collect();
+        let text = "      * fixed comment\nIDENTIFICATION DIVISION.\n";
+        let toks = highlight_keyword_lang(text, "*>", "", "", &refs);
+        assert!(toks.iter().any(|t| t.scope == Scope::Comment && text[t.start..t.end].contains("fixed")));
+        assert!(toks.iter().any(|t| text[t.start..t.end] == *"IDENTIFICATION"));
+    }
+
+    #[test]
+    fn xml_cdata_highlights_inner_html() {
+        let text = r#"<?xml version="1.0"?>
+<item>
+  <description><![CDATA[
+    <h3>Added</h3>
+    <ul><li><strong>x</strong></li></ul>
+  ]]></description>
+</item>
+"#;
+        let toks = highlight_tree_sitter("xml", text).expect("xml");
+        assert!(
+            toks.iter()
+                .any(|t| t.scope == Scope::Keyword && text[t.start..t.end] == *"h3"),
+            "expected HTML h3 tag inside CDATA: {toks:?}"
+        );
+        assert!(toks.iter().any(|t| {
+            t.scope == Scope::Keyword && text[t.start..t.end] == *"strong"
+        }));
+        assert!(toks.iter().any(|t| t.scope == Scope::Preproc)); // CDATA delimiters
+    }
 }
+

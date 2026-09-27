@@ -7,6 +7,8 @@ final class ClipboardHistoryPanel: NSView, NSTableViewDataSource, NSTableViewDel
     private var items: [String] = []
     private var lastSeen = ""
     private var timer: Timer?
+    private var headerLabel: NSTextField!
+    private var clearButton: NSButton!
     var onPaste: ((String) -> Void)?
 
     override init(frame frameRect: NSRect) {
@@ -14,15 +16,15 @@ final class ClipboardHistoryPanel: NSView, NSTableViewDataSource, NSTableViewDel
         wantsLayer = true
         layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
 
-        let header = NSTextField(labelWithString: "Clipboard History")
-        header.font = NSFont.boldSystemFont(ofSize: 11)
-        header.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(header)
+        headerLabel = NSTextField(labelWithString: "Clipboard History")
+        headerLabel.font = NSFont.boldSystemFont(ofSize: 11)
+        headerLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(headerLabel)
 
-        let clear = NSButton(title: "Clear", target: self, action: #selector(clearAll))
-        clear.bezelStyle = .rounded
-        clear.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(clear)
+        clearButton = NSButton(title: "Clear", target: self, action: #selector(clearAll))
+        clearButton.bezelStyle = .rounded
+        clearButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(clearButton)
 
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("clip"))
         col.title = "Clip"
@@ -43,11 +45,11 @@ final class ClipboardHistoryPanel: NSView, NSTableViewDataSource, NSTableViewDel
         addSubview(scroll)
 
         NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: topAnchor, constant: 6),
-            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            clear.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            clear.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            scroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 4),
+            headerLabel.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            headerLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            clearButton.centerYAnchor.constraint(equalTo: headerLabel.centerYAnchor),
+            clearButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            scroll.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: 4),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -57,6 +59,14 @@ final class ClipboardHistoryPanel: NSView, NSTableViewDataSource, NSTableViewDel
         timer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
             self?.pollPasteboard()
         }
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(nativeLangDidChange(_:)),
+            name: NativeLang.didChangeNotification,
+            object: nil
+        )
+        applyLocalizedStrings()
     }
 
     @available(*, unavailable)
@@ -66,6 +76,20 @@ final class ClipboardHistoryPanel: NSView, NSTableViewDataSource, NSTableViewDel
 
     deinit {
         timer?.invalidate()
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func nativeLangDidChange(_ note: Notification) {
+        applyLocalizedStrings()
+    }
+
+    private func applyLocalizedStrings() {
+        headerLabel.stringValue = NativeLang.sectionString(
+            section: "ClipboardHistory", tag: "PanelTitle", fallback: "Clipboard History"
+        )
+        clearButton.title = NativeLang.dialogString(
+            dialogId: "ShortcutMapper", itemId: "2606", fallback: "Clear"
+        )
     }
 
     func start() { pollPasteboard() }

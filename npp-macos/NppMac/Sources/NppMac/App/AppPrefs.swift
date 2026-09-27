@@ -97,4 +97,21 @@ enum AppPrefs {
             NSApp.appearance = nil
         }
     }
+
+    /// Shortcut Mapper overrides keyed by English command title (`en:` menu id).
+    static var shortcutOverrides: [String: ShortcutBinding] {
+        get {
+            guard let data = defaults.data(forKey: "shortcutOverrides"),
+                  let decoded = try? JSONDecoder().decode([String: ShortcutBinding].self, from: data)
+            else { return [:] }
+            return decoded
+        }
+        set {
+            if newValue.isEmpty {
+                defaults.removeObject(forKey: "shortcutOverrides")
+            } else if let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: "shortcutOverrides")
+            }
+        }
+    }
 }

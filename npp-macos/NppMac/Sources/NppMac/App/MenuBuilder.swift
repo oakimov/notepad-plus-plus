@@ -57,6 +57,7 @@ enum MenuBuilder {
         let settings = NSMenu(title: "Settings")
         item(settings, "Preferences…", #selector(MainWindowController.openPreferences(_:)), ",")
         item(settings, "Style Configurator…", #selector(MainWindowController.openStyleConfigurator(_:)), "")
+        item(settings, "Shortcut Mapper…", #selector(MainWindowController.openShortcutMapper(_:)), "")
         settings.addItem(.separator())
         let theme = NSMenu(title: "Theme")
         item(theme, "Default (stylers.model)", #selector(MainWindowController.themeSelect(_:)), "")
@@ -207,6 +208,7 @@ enum MenuBuilder {
         let saveAll = m.addItem(withTitle: "Save All", action: #selector(MainWindowController.fileSaveAll(_:)), keyEquivalent: "s")
         saveAll.keyEquivalentModifierMask = [.command, .option]
         saveAll.target = nil
+        saveAll.identifier = NSUserInterfaceItemIdentifier("en:Save All")
         m.addItem(.separator())
         item(m, "Close Tab", #selector(MainWindowController.fileClose(_:)), "w")
         item(m, "Close All Tabs", #selector(MainWindowController.fileCloseAll(_:)), "W")
@@ -216,6 +218,7 @@ enum MenuBuilder {
             keyEquivalent: ""
         )
         closeOthers.target = nil
+        closeOthers.identifier = NSUserInterfaceItemIdentifier("en:Close All but Current")
         m.addItem(.separator())
         item(m, "Open Containing Folder", #selector(MainWindowController.fileOpenContainingFolder(_:)), "")
         item(m, "Copy File Path", #selector(MainWindowController.fileCopyPath(_:)), "")
@@ -391,6 +394,7 @@ enum MenuBuilder {
         let replace = m.addItem(withTitle: "Replace…", action: #selector(MainWindowController.searchReplace(_:)), keyEquivalent: "f")
         replace.keyEquivalentModifierMask = [.command, .option]
         replace.target = nil
+        replace.identifier = NSUserInterfaceItemIdentifier("en:Replace…")
         item(m, "Find in Files…", #selector(MainWindowController.searchFindInFiles(_:)), "")
         m.addItem(.separator())
         item(m, "Go to Line…", #selector(MainWindowController.searchGotoLine(_:)), "")

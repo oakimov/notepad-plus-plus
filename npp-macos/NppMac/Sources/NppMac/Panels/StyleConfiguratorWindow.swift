@@ -4,17 +4,22 @@ import AppKit
 final class StyleConfiguratorWindow: NSWindowController {
     private static var shared: StyleConfiguratorWindow?
 
-    private struct Row {
+    private struct LabeledRow {
         var scope: Int32
-        var title: String
+        var englishTitle: String
+        var label: NSTextField
         var well: NSColorWell
     }
 
-    private var rows: [Row] = []
+    private var rows: [LabeledRow] = []
+    private var resetButton: NSButton!
+    private var cancelButton: NSButton!
+    private var okButton: NSButton!
 
     static func show() {
         if shared == nil { shared = StyleConfiguratorWindow() }
         shared?.loadColors()
+        shared?.applyLocalizedStrings()
         shared?.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -61,22 +66,22 @@ final class StyleConfiguratorWindow: NSWindowController {
             row.addArrangedSubview(label)
             row.addArrangedSubview(well)
             stack.addArrangedSubview(row)
-            rows.append(Row(scope: scope, title: title, well: well))
+            rows.append(LabeledRow(scope: scope, englishTitle: title, label: label, well: well))
         }
 
         let buttons = NSStackView()
         buttons.orientation = .horizontal
         buttons.spacing = 8
-        let reset = NSButton(title: "Reset Overrides", target: self, action: #selector(resetOverrides(_:)))
-        reset.bezelStyle = .rounded
-        let cancel = NSButton(title: "Cancel", target: self, action: #selector(close(_:)))
-        cancel.bezelStyle = .rounded
-        let ok = NSButton(title: "OK", target: self, action: #selector(saveAndClose(_:)))
-        ok.bezelStyle = .rounded
-        ok.keyEquivalent = "\r"
-        buttons.addArrangedSubview(reset)
-        buttons.addArrangedSubview(cancel)
-        buttons.addArrangedSubview(ok)
+        resetButton = NSButton(title: "Reset Overrides", target: self, action: #selector(resetOverrides(_:)))
+        resetButton.bezelStyle = .rounded
+        cancelButton = NSButton(title: "Cancel", target: self, action: #selector(close(_:)))
+        cancelButton.bezelStyle = .rounded
+        okButton = NSButton(title: "OK", target: self, action: #selector(saveAndClose(_:)))
+        okButton.bezelStyle = .rounded
+        okButton.keyEquivalent = "\r"
+        buttons.addArrangedSubview(resetButton)
+        buttons.addArrangedSubview(cancelButton)
+        buttons.addArrangedSubview(okButton)
         stack.addArrangedSubview(buttons)
 
         NSLayoutConstraint.activate([
@@ -84,11 +89,37 @@ final class StyleConfiguratorWindow: NSWindowController {
             stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 16),
             stack.trailingAnchor.constraint(lessThanOrEqualTo: window.contentView!.trailingAnchor, constant: -16),
         ])
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(nativeLangDidChange(_:)),
+            name: NativeLang.didChangeNotification,
+            object: nil
+        )
+        applyLocalizedStrings()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) is not supported")
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func nativeLangDidChange(_ note: Notification) {
+        applyLocalizedStrings()
+    }
+
+    private func applyLocalizedStrings() {
+        window?.title = NativeLang.dialogTitle(dialogId: "StyleConfig", fallback: "Style Configurator")
+        for row in rows {
+            row.label.stringValue = NativeLang.title(forEnglish: row.englishTitle) ?? row.englishTitle
+        }
+        cancelButton.title = NativeLang.dialogString(dialogId: "StyleConfig", itemId: "2", fallback: "Cancel")
+        okButton.title = NativeLang.miscString(id: "common-ok", fallback: "OK")
+        resetButton.title = NativeLang.title(forEnglish: "Reset Overrides") ?? "Reset Overrides"
     }
 
     private func loadColors() {

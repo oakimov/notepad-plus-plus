@@ -1,0 +1,4 @@
+module Cnpp_plugin {
+    header "npp_host_abi.h"
+    export *
+}

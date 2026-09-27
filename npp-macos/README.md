@@ -3,22 +3,22 @@
 In-repo sibling of the Win32 Notepad++ codebase. Faithful behavior port:
 internal tab bar, native menubar, multi-encoding I/O, tree-sitter + keyword highlighting.
 
-## Status: viable editor (FFI-linked) + full Language menu
+## Status: full-port shell (NSTextView + Rust FFI)
 
-Swift AppKit shell talks to Rust through `crates/npp-ffi` (C ABI):
+Swift AppKit shell talks to Rust through `crates/npp-ffi` (C ABI). Phases 1–7 from
+`docs/port-roadmap.md` are largely in place; remaining polish is tracked there.
 
-- Native menubar (App/File/Edit/Search/View/Encoding/Language/Help) with Quit
-- **Language menu**: compact A–Z submenus for all stock langs from `langs.model.xml`,
-  set-language, auto-detect by extension, checkmarks, status-bar display names
-- Syntax highlighting: tree-sitter (13 langs) + keyword/comment/string fallback;
-  colors from `stylers.model.xml`
-- Internal tab bar (select, drag-reorder, × close with dirty prompt)
-- `NSTextView` editor with debounced syntax highlighting
-- Find/Replace, Find-in-Files, Go-to-Line, Preferences stub, status bar
-- Open/save via `npp-fs` (UTF-8 / UTF-8-BOM / UTF-16 / ANSI)
-- View: word wrap, line numbers, zoom, bookmarks
-- Encoding: UTF-16 + EOL Conversion (CRLF/LF/CR)
-- Edit: comment toggle, sort lines, indent/unindent
+- Native menubar (App/File/Edit/Search/View/Encoding/Language/Settings/Tools/Macro/Run/Plugins/Window/Help)
+- **Language menu**: compact A–Z for all stock langs from `langs.model.xml`,
+  set-language, auto-detect, checkmarks, status-bar display names
+- Syntax highlighting: tree-sitter (13) + keyword fallback (case-insensitive,
+  hyphenated words, diff/LaTeX scanners, XML CDATA→HTML); colors from `stylers.model.xml`
+- Tabs, Find/Replace/FiF, session/recent/`config.xml`, Preferences, Style Configurator
+- Panels: Folder workspace, Function List, Document Map, Clipboard History, Character Panel
+- Plugins: `dlopen` host for nested `.dylib` (UTF-8 exports); see `docs/plugin-porting.md`
+- Themes / Appearance / UI Language / Print / Column Mode / Show Whitespace
+- Open/save via `npp-fs` (UTF-8 / UTF-8-BOM / UTF-16 / ANSI); EOL conversion
+- View: wrap, line numbers, zoom, bookmarks; Edit: comment, sort, indent, …
 
 ## Layout
 

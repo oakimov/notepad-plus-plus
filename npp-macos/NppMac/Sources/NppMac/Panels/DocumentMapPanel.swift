@@ -5,6 +5,7 @@ final class DocumentMapPanel: NSView, NSTextViewDelegate {
     private let scroll = NSScrollView()
     private let mapView = NSTextView()
     private var syncing = false
+    private var headerLabel: NSTextField!
     var onJumpFraction: ((CGFloat) -> Void)?
 
     override init(frame frameRect: NSRect) {
@@ -12,10 +13,10 @@ final class DocumentMapPanel: NSView, NSTextViewDelegate {
         wantsLayer = true
         layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
 
-        let header = NSTextField(labelWithString: "Document Map")
-        header.font = NSFont.boldSystemFont(ofSize: 11)
-        header.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(header)
+        headerLabel = NSTextField(labelWithString: "Document Map")
+        headerLabel.font = NSFont.boldSystemFont(ofSize: 11)
+        headerLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(headerLabel)
 
         mapView.isEditable = false
         mapView.isSelectable = false
@@ -43,19 +44,41 @@ final class DocumentMapPanel: NSView, NSTextViewDelegate {
         addSubview(scroll)
 
         NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: topAnchor, constant: 6),
-            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            scroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 4),
+            headerLabel.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            headerLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            scroll.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: 4),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
             widthAnchor.constraint(greaterThanOrEqualToConstant: 100),
         ])
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(nativeLangDidChange(_:)),
+            name: NativeLang.didChangeNotification,
+            object: nil
+        )
+        applyLocalizedStrings()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) is not supported")
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func nativeLangDidChange(_ note: Notification) {
+        applyLocalizedStrings()
+    }
+
+    private func applyLocalizedStrings() {
+        headerLabel.stringValue = NativeLang.sectionString(
+            section: "DocumentMap", tag: "PanelTitle", fallback: "Document Map"
+        )
     }
 
     func setText(_ text: String) {

@@ -10,10 +10,14 @@ final class PreferencesWindow: NSWindowController {
     private var sessionBox: NSButton!
     private var watchBox: NSButton!
     private var tabField: NSTextField!
+    private var tabLabel: NSTextField!
+    private var cancelButton: NSButton!
+    private var okButton: NSButton!
 
     static func show() {
         if shared == nil { shared = PreferencesWindow() }
         shared?.loadFromPrefs()
+        shared?.applyLocalizedStrings()
         shared?.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -45,7 +49,7 @@ final class PreferencesWindow: NSWindowController {
         let tabRow = NSStackView()
         tabRow.orientation = .horizontal
         tabRow.spacing = 8
-        let tabLabel = NSTextField(labelWithString: "Tab width:")
+        tabLabel = NSTextField(labelWithString: "Tab width:")
         tabField = NSTextField(string: "4")
         tabField.frame.size.width = 48
         tabField.widthAnchor.constraint(equalToConstant: 48).isActive = true
@@ -59,13 +63,13 @@ final class PreferencesWindow: NSWindowController {
         let buttons = NSStackView()
         buttons.orientation = .horizontal
         buttons.spacing = 8
-        let cancel = NSButton(title: "Cancel", target: self, action: #selector(close(_:)))
-        cancel.bezelStyle = .rounded
-        let ok = NSButton(title: "OK", target: self, action: #selector(saveAndClose(_:)))
-        ok.bezelStyle = .rounded
-        ok.keyEquivalent = "\r"
-        buttons.addArrangedSubview(cancel)
-        buttons.addArrangedSubview(ok)
+        cancelButton = NSButton(title: "Cancel", target: self, action: #selector(close(_:)))
+        cancelButton.bezelStyle = .rounded
+        okButton = NSButton(title: "OK", target: self, action: #selector(saveAndClose(_:)))
+        okButton.bezelStyle = .rounded
+        okButton.keyEquivalent = "\r"
+        buttons.addArrangedSubview(cancelButton)
+        buttons.addArrangedSubview(okButton)
         stack.addArrangedSubview(buttons)
 
         NSLayoutConstraint.activate([
@@ -73,11 +77,50 @@ final class PreferencesWindow: NSWindowController {
             stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 20),
             stack.trailingAnchor.constraint(lessThanOrEqualTo: window.contentView!.trailingAnchor, constant: -20),
         ])
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(nativeLangDidChange(_:)),
+            name: NativeLang.didChangeNotification,
+            object: nil
+        )
+        applyLocalizedStrings()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) is not supported")
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func nativeLangDidChange(_ note: Notification) {
+        applyLocalizedStrings()
+    }
+
+    private func applyLocalizedStrings() {
+        window?.title = NativeLang.dialogTitle(dialogId: "Preference", fallback: "Preferences")
+        // Closest upstream Preference strings; mac-only wording stays as English fallback.
+        wrapBox.title = NativeLang.commandTitle(id: "44022", fallback: "Word wrap by default")
+        linesBox.title = NativeLang.dialogString(
+            dialogId: "MarginsBorderEdge", itemId: "6291", fallback: "Show line numbers"
+        )
+        backupBox.title = NativeLang.dialogString(
+            dialogId: "Backup", itemId: "6801", fallback: "Create .bak backup on save"
+        )
+        sessionBox.title = NativeLang.dialogString(
+            dialogId: "Backup", itemId: "6309", fallback: "Restore session on launch"
+        )
+        watchBox.title = NativeLang.dialogString(
+            dialogId: "MISC", itemId: "6312", fallback: "Watch for disk changes"
+        )
+        tabLabel.stringValue = NativeLang.dialogString(
+            dialogId: "Indentation", itemId: "6303", fallback: "Tab width:"
+        )
+        cancelButton.title = NativeLang.miscString(id: "common-cancel", fallback: "Cancel")
+        okButton.title = NativeLang.miscString(id: "common-ok", fallback: "OK")
     }
 
     private func loadFromPrefs() {

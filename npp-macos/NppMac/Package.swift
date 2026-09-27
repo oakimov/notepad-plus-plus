@@ -16,9 +16,14 @@ let package = Package(
             path: "Sources/Cnpp_ffi",
             publicHeadersPath: "include"
         ),
+        .target(
+            name: "Cnpp_plugin",
+            path: "Sources/Cnpp_plugin",
+            publicHeadersPath: "include"
+        ),
         .executableTarget(
             name: "NppMac",
-            dependencies: ["Cnpp_ffi"],
+            dependencies: ["Cnpp_ffi", "Cnpp_plugin"],
             path: "Sources/NppMac",
             resources: [
                 .copy("Resources/AppIcon.png"),
@@ -29,6 +34,9 @@ let package = Package(
                     "-lc++",
                     "-framework", "Security",
                     "-framework", "SystemConfiguration",
+                    // Export host ABI so plugins can dlsym("nppSendMessage").
+                    "-Xlinker", "-exported_symbol", "-Xlinker", "_nppSendMessage",
+                    "-Xlinker", "-exported_symbol", "-Xlinker", "_nppRegisterSendMessage",
                 ]),
             ]
         ),

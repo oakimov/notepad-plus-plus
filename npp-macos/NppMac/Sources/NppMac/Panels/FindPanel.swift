@@ -32,6 +32,11 @@ final class FindPanel: NSView {
     private var caseBox = NSButton(checkboxWithTitle: "Match case", target: nil, action: nil)
     private var wordBox = NSButton(checkboxWithTitle: "Whole word", target: nil, action: nil)
     private var regexBox = NSButton(checkboxWithTitle: "Regex", target: nil, action: nil)
+    private var nextButton: NSButton!
+    private var replaceOneButton: NSButton!
+    private var replaceAllButton: NSButton!
+    private var countButton: NSButton!
+    private var hideButton: NSButton!
 
     var findText: String { findField.stringValue }
 
@@ -66,26 +71,59 @@ final class FindPanel: NSView {
         stack.addArrangedSubview(wordBox)
         stack.addArrangedSubview(regexBox)
 
-        let next = NSButton(title: "Find Next", target: self, action: #selector(nextClicked(_:)))
-        next.bezelStyle = .rounded
-        stack.addArrangedSubview(next)
-        let replaceOne = NSButton(title: "Replace", target: self, action: #selector(replaceOneClicked(_:)))
-        replaceOne.bezelStyle = .rounded
-        stack.addArrangedSubview(replaceOne)
-        let all = NSButton(title: "Replace All", target: self, action: #selector(replaceAllClicked(_:)))
-        all.bezelStyle = .rounded
-        stack.addArrangedSubview(all)
-        let count = NSButton(title: "Count", target: self, action: #selector(countClicked(_:)))
-        count.bezelStyle = .rounded
-        stack.addArrangedSubview(count)
-        let hide = NSButton(title: "Hide", target: self, action: #selector(hideClicked(_:)))
-        hide.bezelStyle = .inline
-        stack.addArrangedSubview(hide)
+        nextButton = NSButton(title: "Find Next", target: self, action: #selector(nextClicked(_:)))
+        nextButton.bezelStyle = .rounded
+        stack.addArrangedSubview(nextButton)
+        replaceOneButton = NSButton(title: "Replace", target: self, action: #selector(replaceOneClicked(_:)))
+        replaceOneButton.bezelStyle = .rounded
+        stack.addArrangedSubview(replaceOneButton)
+        replaceAllButton = NSButton(title: "Replace All", target: self, action: #selector(replaceAllClicked(_:)))
+        replaceAllButton.bezelStyle = .rounded
+        stack.addArrangedSubview(replaceAllButton)
+        countButton = NSButton(title: "Count", target: self, action: #selector(countClicked(_:)))
+        countButton.bezelStyle = .rounded
+        stack.addArrangedSubview(countButton)
+        hideButton = NSButton(title: "Hide", target: self, action: #selector(hideClicked(_:)))
+        hideButton.bezelStyle = .inline
+        stack.addArrangedSubview(hideButton)
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(nativeLangDidChange(_:)),
+            name: NativeLang.didChangeNotification,
+            object: nil
+        )
+        applyLocalizedStrings()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) is not supported")
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func nativeLangDidChange(_ note: Notification) {
+        applyLocalizedStrings()
+    }
+
+    private func applyLocalizedStrings() {
+        findField.placeholderString = NativeLang.dialogTitle(
+            dialogId: "Find", attribute: "titleFind", fallback: "Find"
+        )
+        replaceField.placeholderString = NativeLang.dialogTitle(
+            dialogId: "Find", attribute: "titleReplace", fallback: "Replace"
+        )
+        caseBox.title = NativeLang.dialogString(dialogId: "Find", itemId: "1604", fallback: "Match case")
+        wordBox.title = NativeLang.dialogString(dialogId: "Find", itemId: "1603", fallback: "Whole word")
+        regexBox.title = NativeLang.dialogString(dialogId: "Find", itemId: "1605", fallback: "Regex")
+        nextButton.title = NativeLang.dialogString(dialogId: "Find", itemId: "1", fallback: "Find Next")
+        replaceOneButton.title = NativeLang.dialogString(dialogId: "Find", itemId: "1608", fallback: "Replace")
+        replaceAllButton.title = NativeLang.dialogString(dialogId: "Find", itemId: "1609", fallback: "Replace All")
+        countButton.title = NativeLang.dialogString(dialogId: "Find", itemId: "1614", fallback: "Count")
+        hideButton.title = NativeLang.dialogString(dialogId: "Global", itemId: "6134", fallback: "Hide")
     }
 
     func focusFind() {

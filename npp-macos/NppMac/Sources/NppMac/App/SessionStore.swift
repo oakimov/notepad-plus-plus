@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Persist open tabs (`session.xml`) and recent files under Application Support/NppMac.
@@ -16,6 +17,7 @@ enum SessionStore {
 
     /// Persist AppPrefs into a minimal Notepad++-style `config.xml`.
     static func saveConfig() {
+        let shortcutsXML = shortcutOverridesXML()
         let xml = """
         <?xml version="1.0" encoding="UTF-8" ?>
         <NotepadPlus>
@@ -33,6 +35,8 @@ enum SessionStore {
                 <Theme>\(xmlEscape(AppPrefs.themeName))</Theme>
                 <NativeLang>\(xmlEscape(NativeLang.languageFile))</NativeLang>
             </GUIConfig>
+            <Shortcuts>
+        \(shortcutsXML)    </Shortcuts>
         </NotepadPlus>
         """
         try? xml.write(to: configURL, atomically: true, encoding: .utf8)
@@ -53,6 +57,64 @@ enum SessionStore {
         if let v = intTag("ShowWhitespace", in: text) { AppPrefs.showWhitespace = v != 0 }
         if let s = stringTag("Theme", in: text) { AppPrefs.themeName = xmlUnescape(s) }
         if let s = stringTag("NativeLang", in: text) { NativeLang.languageFile = xmlUnescape(s) }
+        loadShortcutOverrides(from: text)
+    }
+
+    private static func shortcutOverridesXML() -> String {
+        let ovr = AppPrefs.shortcutOverrides
+        guard !ovr.isEmpty else { return "" }
+        var lines = ""
+        for id in ovr.keys.sorted() {
+            guard let b = ovr[id] else { continue }
+            let mods = modsToken(b.mods)
+            lines += "        <Item id=\"\(xmlEscapeAttr(id))\" key=\"\(xmlEscapeAttr(b.key))\" mods=\"\(mods)\" />\n"
+        }
+        return lines
+    }
+
+    private static func loadShortcutOverrides(from text: String) {
+        let pattern = #"<Item\s+id="([^"]*)"\s+key="([^"]*)"\s+mods="([^"]*)"\s*/>"#
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return }
+        let ns = text as NSString
+        var map: [String: ShortcutBinding] = [:]
+        for m in re.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            let id = xmlUnescape(ns.substring(with: m.range(at: 1)))
+            let key = xmlUnescape(ns.substring(with: m.range(at: 2)))
+            let mods = modsFromToken(ns.substring(with: m.range(at: 3)))
+            map[id] = ShortcutBinding(key: key, mods: mods)
+        }
+        // Only replace when the Shortcuts block is present (empty block clears).
+        if text.contains("<Shortcuts>") {
+            AppPrefs.shortcutOverrides = map
+        }
+    }
+
+    private static func modsToken(_ raw: UInt) -> String {
+        let flags = NSEvent.ModifierFlags(rawValue: raw)
+        var parts: [String] = []
+        if flags.contains(.control) { parts.append("control") }
+        if flags.contains(.option) { parts.append("option") }
+        if flags.contains(.shift) { parts.append("shift") }
+        if flags.contains(.command) { parts.append("command") }
+        return parts.isEmpty ? "none" : parts.joined(separator: ",")
+    }
+
+    private static func modsFromToken(_ token: String) -> UInt {
+        var flags: NSEvent.ModifierFlags = []
+        for part in token.lowercased().split(separator: ",") {
+            switch part.trimmingCharacters(in: .whitespaces) {
+            case "control", "ctrl": flags.insert(.control)
+            case "option", "alt": flags.insert(.option)
+            case "shift": flags.insert(.shift)
+            case "command", "cmd": flags.insert(.command)
+            default: break
+            }
+        }
+        return flags.rawValue
+    }
+
+    private static func xmlEscapeAttr(_ s: String) -> String {
+        xmlEscape(s).replacingOccurrences(of: "\"", with: "&quot;")
     }
 
     private static func intTag(_ name: String, in text: String) -> Int? {

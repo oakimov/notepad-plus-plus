@@ -32,18 +32,32 @@ pub struct FuncItem {
     pub init_checked: bool,
 }
 
-/// `NPPM_*` message numbers implemented by the host (subset first).
+/// `NPPM_*` message numbers — match `Notepad_plus_msgs.h` (`NPPMSG = 2024`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u32)]
 pub enum Nppm {
-    /// Active buffer id.
-    GetCurrentBufferId = 2029,
-    /// Active editor token (main/second).
-    GetCurrentScintilla = 2030,
-    /// Execute a menu command by `IDM_*` id.
-    MenuCommand = 2024,
+    /// Active editor token (NppMac) / view index write (Win32 compat via lParam).
+    GetCurrentScintilla = 2028,
     /// Active document index.
-    GetCurrentDocIndex = 2033,
+    GetCurrentDocIndex = 2047,
+    /// Execute a menu command by `IDM_*` id.
+    MenuCommand = 2072,
+    /// Active buffer id (= doc index on NppMac).
+    GetCurrentBufferId = 2084,
+}
+
+impl Nppm {
+    /// Parse a raw message number into the M4 subset.
+    #[must_use]
+    pub fn from_raw(msg: u32) -> Option<Self> {
+        match msg {
+            2028 => Some(Self::GetCurrentScintilla),
+            2047 => Some(Self::GetCurrentDocIndex),
+            2072 => Some(Self::MenuCommand),
+            2084 => Some(Self::GetCurrentBufferId),
+            _ => None,
+        }
+    }
 }
 
 /// Scintilla-notification shim: Rust edit event translated for `beNotified`.
@@ -57,6 +71,30 @@ pub struct EditNotification {
     pub length: usize,
     /// Lines added (>0) or removed (<0).
     pub lines_added: i32,
+}
+
+/// Notification codes forwarded to `beNotified` (`NPPN_*` / `SCN_*`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u32)]
+pub enum NotifyCode {
+    /// Host finished startup.
+    Ready = 1001,
+    /// File about to close.
+    FileBeforeClose = 1003,
+    /// File just opened.
+    FileOpened = 1004,
+    /// File just closed.
+    FileClosed = 1005,
+    /// File about to save.
+    FileBeforeSave = 1007,
+    /// File just saved.
+    FileSaved = 1008,
+    /// Host shutting down.
+    Shutdown = 1009,
+    /// Buffer brought to foreground.
+    BufferActivated = 1010,
+    /// Text modified (`SCN_MODIFIED`).
+    ScnModified = 2008,
 }
 
 /// Loaded plugin record.
@@ -146,14 +184,22 @@ impl PluginHost {
     }
 
     /// Dispatch the implemented `NPPM_*` subset.
+    ///
+    /// `MenuCommand` returns 0 here — the Swift host executes `IDM_*` actions.
     #[must_use]
     pub fn dispatch(&self, msg: Nppm, _wparam: usize, _lparam: isize) -> isize {
         match msg {
             Nppm::GetCurrentBufferId => self.current_buffer as isize,
             Nppm::GetCurrentScintilla => self.current_editor as isize,
-            Nppm::MenuCommand => 0, // executed by the Swift side via IDM_* table
+            Nppm::MenuCommand => 0,
             Nppm::GetCurrentDocIndex => self.current_doc as isize,
         }
+    }
+
+    /// Dispatch from a raw message number (unknown → 0).
+    #[must_use]
+    pub fn dispatch_raw(&self, msg: u32, wparam: usize, lparam: isize) -> isize {
+        Nppm::from_raw(msg).map_or(0, |m| self.dispatch(m, wparam, lparam))
     }
 
     /// Update host state (called on tab switch / edit).
@@ -219,10 +265,21 @@ mod tests {
         );
         assert_eq!(h.dispatch(Nppm::GetCurrentBufferId, 0, 0), 7);
         assert_eq!(h.dispatch(Nppm::GetCurrentDocIndex, 0, 0), 2);
+        assert_eq!(h.dispatch(Nppm::GetCurrentScintilla, 0, 0), 1);
+        assert_eq!(h.dispatch_raw(2084, 0, 0), 7);
+        assert_eq!(h.dispatch_raw(2028, 0, 0), 1);
         let m = h.menu_map();
         assert_eq!(m.len(), 1);
         assert_eq!(m[&base].0, "Demo");
         assert!(m[&base].1.len() <= 63);
+    }
+
+    #[test]
+    fn nppm_numbers_match_upstream() {
+        assert_eq!(Nppm::GetCurrentScintilla as u32, 2028);
+        assert_eq!(Nppm::GetCurrentDocIndex as u32, 2047);
+        assert_eq!(Nppm::MenuCommand as u32, 2072);
+        assert_eq!(Nppm::GetCurrentBufferId as u32, 2084);
     }
 
     #[test]

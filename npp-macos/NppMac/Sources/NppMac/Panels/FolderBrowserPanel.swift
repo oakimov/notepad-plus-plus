@@ -6,6 +6,8 @@ final class FolderBrowserPanel: NSView, NSOutlineViewDataSource, NSOutlineViewDe
     private let scroll = NSScrollView()
     private var rootURL: URL?
     private var childrenCache: [URL: [URL]] = [:]
+    private var headerLabel: NSTextField!
+    private var openButton: NSButton!
     var onOpenFile: ((URL) -> Void)?
 
     override init(frame frameRect: NSRect) {
@@ -13,15 +15,15 @@ final class FolderBrowserPanel: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         wantsLayer = true
         layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
 
-        let header = NSTextField(labelWithString: "Folder as Workspace")
-        header.font = NSFont.boldSystemFont(ofSize: 11)
-        header.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(header)
+        headerLabel = NSTextField(labelWithString: "Folder as Workspace")
+        headerLabel.font = NSFont.boldSystemFont(ofSize: 11)
+        headerLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(headerLabel)
 
-        let openBtn = NSButton(title: "Open Folder…", target: self, action: #selector(pickFolder))
-        openBtn.bezelStyle = .rounded
-        openBtn.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(openBtn)
+        openButton = NSButton(title: "Open Folder…", target: self, action: #selector(pickFolder))
+        openButton.bezelStyle = .rounded
+        openButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(openButton)
 
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
         col.title = "Name"
@@ -43,21 +45,48 @@ final class FolderBrowserPanel: NSView, NSOutlineViewDataSource, NSOutlineViewDe
         addSubview(scroll)
 
         NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: topAnchor, constant: 6),
-            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            openBtn.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 4),
-            openBtn.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            scroll.topAnchor.constraint(equalTo: openBtn.bottomAnchor, constant: 4),
+            headerLabel.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            headerLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            openButton.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: 4),
+            openButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            scroll.topAnchor.constraint(equalTo: openButton.bottomAnchor, constant: 4),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
             widthAnchor.constraint(greaterThanOrEqualToConstant: 180),
         ])
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(nativeLangDidChange(_:)),
+            name: NativeLang.didChangeNotification,
+            object: nil
+        )
+        applyLocalizedStrings()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) is not supported")
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func nativeLangDidChange(_ note: Notification) {
+        applyLocalizedStrings()
+    }
+
+    private func applyLocalizedStrings() {
+        headerLabel.stringValue = NativeLang.sectionString(
+            section: "FolderAsWorkspace", tag: "PanelTitle", fallback: "Folder as Workspace"
+        )
+        openButton.title = NativeLang.sectionString(
+            section: "FolderAsWorkspace",
+            tag: "SelectFolderFromBrowserString",
+            fallback: "Open Folder…"
+        )
     }
 
     func setRoot(_ url: URL?) {

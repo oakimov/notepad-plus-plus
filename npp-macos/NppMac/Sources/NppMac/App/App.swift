@@ -26,10 +26,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NativeLang.loadCurrent()
         applyAppIcon()
         MenuBuilder.build()
+        ShortcutMapper.captureDefaultsFromMenus()
+        ShortcutMapper.applyOverrides()
         MenuBuilder.applyNativeLangTitles()
         let controller = MainWindowController(documents: DocumentStore(engine: NppEngine(langsModel: Self.langsModelPath())))
         windowController = controller
         MenuBuilder.retarget(to: controller)
+        PluginRuntime.shared.menuTarget = controller
+        PluginRuntime.shared.syncFromStore(selectedIndex: 0)
+        // NPPN_READY already sent from MainWindowController.init (after plugin load).
         controller.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
 
