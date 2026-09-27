@@ -3,6 +3,8 @@ import AppKit
 /// Builds the native menubar: App/File/Edit/Search/View/Encoding/Language/Help.
 enum MenuBuilder {
     private static var builtMenus: [NSMenu] = []
+    /// Language → User-defined submenu (rebuilt after UDL load/save).
+    private static var userDefinedMenu: NSMenu?
 
     static func build() {
         let mainMenu = NSMenu(title: "MainMenu")
@@ -498,7 +500,43 @@ enum MenuBuilder {
         }
 
         m.addItem(.separator())
+
+        let userDef = NSMenu(title: "User-defined")
+        userDefinedMenu = userDef
+        rebuildUserDefinedSubmenu(names: UDLStore.shared.names)
+        let udParent = m.addItem(withTitle: "User-defined", action: nil, keyEquivalent: "")
+        udParent.identifier = NSUserInterfaceItemIdentifier("en:User-defined")
+        m.setSubmenu(userDef, for: udParent)
+
+        item(m, "User-Defined Language…", #selector(MainWindowController.openUDLEditor(_:)), "")
         item(m, "Load UDL…", #selector(MainWindowController.langLoadUDL(_:)), "")
+        item(m, "Open userDefineLangs Folder…", #selector(MainWindowController.openUserDefineLangsFolder(_:)), "")
         item(m, "Auto-detect by Extension", #selector(MainWindowController.langAuto(_:)), "")
+    }
+
+    /// Rebuild Language → User-defined from loaded UDL display names.
+    /// Items use `udl_*` engine keys as `representedObject` when available from the store model.
+    static func rebuildUserDefinedSubmenu(names: [String]) {
+        let menu = userDefinedMenu ?? {
+            let m = NSMenu(title: "User-defined")
+            userDefinedMenu = m
+            return m
+        }()
+        menu.removeAllItems()
+        if names.isEmpty {
+            let empty = menu.addItem(withTitle: "(none)", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            return
+        }
+        for name in names.sorted(by: { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }) {
+            let key = UDLStore.shared.language(named: name)?.engineKey ?? name
+            let i = menu.addItem(
+                withTitle: name,
+                action: #selector(MainWindowController.langSelect(_:)),
+                keyEquivalent: ""
+            )
+            i.target = nil
+            i.representedObject = key
+        }
     }
 }

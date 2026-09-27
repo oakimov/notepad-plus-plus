@@ -91,6 +91,13 @@ final class MainWindowController: NSWindowController {
             name: .nppStylesDidChange,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applyUDLFromEditor(_:)),
+            name: UDLEditorWindow.didRequestApplyNotification,
+            object: nil
+        )
+        loadPersistedUDLs()
         startDiskWatchIfNeeded()
         applyThemeFromPrefs()
         PluginRuntime.shared.menuTarget = self
@@ -379,6 +386,7 @@ final class MainWindowController: NSWindowController {
         let tokens = store.highlight(language: meta.language, text: text)
         let full = NSRange(location: 0, length: storage.length)
         let baseFg = store.editorThemeColors().fg ?? NSColor.textColor
+        let isUDL = meta.language.hasPrefix("udl_")
         storage.beginEditing()
         storage.setAttributes([.font: editorFont, .foregroundColor: baseFg], range: full)
         // Longer spans first so nested tokens (e.g. HTML inside XML CDATA) win.
@@ -386,8 +394,26 @@ final class MainWindowController: NSWindowController {
         for t in ordered {
             let end = NSMaxRange(t.range)
             guard t.range.location >= 0, end <= storage.length else { continue }
-            let color = store.color(forScope: t.scope, language: meta.language)
-            storage.addAttribute(.foregroundColor, value: color, range: t.range)
+            if isUDL {
+                let style = store.udlStyle(language: meta.language, styleId: t.scope)
+                var attrs: [NSAttributedString.Key: Any] = [.foregroundColor: style.fg]
+                if let bg = style.bg { attrs[.backgroundColor] = bg }
+                if style.fontStyle != 0 {
+                    var traits: NSFontTraitMask = []
+                    if style.fontStyle & 1 != 0 { traits.insert(.boldFontMask) }
+                    if style.fontStyle & 2 != 0 { traits.insert(.italicFontMask) }
+                    if !traits.isEmpty {
+                        attrs[.font] = NSFontManager.shared.convert(editorFont, toHaveTrait: traits)
+                    }
+                    if style.fontStyle & 4 != 0 {
+                        attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                    }
+                }
+                storage.addAttributes(attrs, range: t.range)
+            } else {
+                let color = store.color(forScope: t.scope, language: meta.language)
+                storage.addAttribute(.foregroundColor, value: color, range: t.range)
+            }
         }
         storage.endEditing()
         refreshLineNumbers()
@@ -1525,6 +1551,15 @@ final class MainWindowController: NSWindowController {
         ShortcutMapperWindow.show()
     }
 
+    @objc func openUDLEditor(_ sender: Any?) {
+        UDLEditorWindow.show()
+    }
+
+    @objc func openUserDefineLangsFolder(_ sender: Any?) {
+        let url = UDLStore.langsFolderURL
+        NSWorkspace.shared.open(url)
+    }
+
     @objc func themeSelect(_ sender: Any?) {
         guard let item = sender as? NSMenuItem else { return }
         let name = (item.representedObject as? String) ?? ""
@@ -1739,6 +1774,8 @@ final class MainWindowController: NSWindowController {
             var lastKey: String?
             for url in panel.urls {
                 do {
+                    // Keep Swift store in sync for the UDL editor + User-defined menu.
+                    _ = try UDLStore.shared.importFile(at: url)
                     let n = try self.store.loadUDL(path: url.path)
                     loaded += n
                     if let key = self.store.languages().last(where: { $0.key.hasPrefix("udl_") })?.key {
@@ -1748,12 +1785,64 @@ final class MainWindowController: NSWindowController {
                     self.presentError(error)
                 }
             }
+            MenuBuilder.rebuildUserDefinedSubmenu(names: UDLStore.shared.names)
             if let lastKey {
                 self.syncEditorToStore()
                 self.store.setLanguage(lastKey)
             }
             self.refresh()
             self.statusLabel.stringValue = "Loaded \(loaded) UDL language(s)"
+        }
+    }
+
+    /// Apply a UDL file into the highlight engine (from editor Save/Import).
+    @objc func applyUDLFromEditor(_ note: Notification) {
+        // Prefer full App Support store replace so removals/renames sync.
+        let storePath = UDLStore.multiLangURL.path
+        let path = (note.userInfo?["path"] as? String).flatMap {
+            FileManager.default.fileExists(atPath: $0) ? $0 : nil
+        } ?? storePath
+        do {
+            let n: Int
+            if path == storePath, FileManager.default.fileExists(atPath: storePath) {
+                n = try store.replaceAllUDL(path: storePath)
+            } else {
+                n = try store.loadUDL(path: path)
+                // Also refresh from multi-lang store when present.
+                if FileManager.default.fileExists(atPath: storePath) {
+                    _ = try? store.replaceAllUDL(path: storePath)
+                }
+            }
+            MenuBuilder.rebuildUserDefinedSubmenu(names: UDLStore.shared.names)
+            if let name = note.userInfo?["name"] as? String,
+               let key = UDLStore.shared.language(named: name)?.engineKey
+            {
+                syncEditorToStore()
+                store.setLanguage(key)
+            } else if let key = store.languages().last(where: { $0.key.hasPrefix("udl_") })?.key {
+                syncEditorToStore()
+                store.setLanguage(key)
+            }
+            refresh()
+            statusLabel.stringValue = "Applied \(n) UDL language(s)"
+        } catch {
+            presentError(error)
+        }
+    }
+
+    /// Load `~/Library/Application Support/NppMac/userDefineLang.xml` into the highlight engine.
+    func loadPersistedUDLs() {
+        let url = UDLStore.multiLangURL
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            MenuBuilder.rebuildUserDefinedSubmenu(names: UDLStore.shared.names)
+            return
+        }
+        do {
+            _ = try store.replaceAllUDL(path: url.path)
+            MenuBuilder.rebuildUserDefinedSubmenu(names: UDLStore.shared.names)
+        } catch {
+            // Non-fatal at launch — editor XML store still works.
+            NSLog("UDL load failed: \(error.localizedDescription)")
         }
     }
 

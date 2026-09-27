@@ -100,9 +100,20 @@ char *npp_lang_name(const NppEngine *engine, int32_t index);
 char *npp_lang_display_name(const NppEngine *engine, int32_t index);
 char *npp_lang_display_name_for(const char *lang);
 
-/// Load a User-Defined Language `.udl.xml` (keyword highlight only).
+/// Clear all registered User-Defined Languages.
+void npp_udl_clear(NppEngine *engine);
+/// Load a `.udl.xml` / multi-lang store (full LexUser highlight path).
 /// Returns count of languages registered, or -1 on error.
 int32_t npp_udl_load(NppEngine *engine, const char *path, char **err_out);
+/// Clear then load `path` (App Support sync). Returns count or -1.
+int32_t npp_udl_replace_all(NppEngine *engine, const char *path, char **err_out);
+/// Registered UDL count / key at index (caller frees key).
+int32_t npp_udl_count(const NppEngine *engine);
+char *npp_udl_key(const NppEngine *engine, int32_t index);
+/// UDL style colors (`RRGGBB`) and fontStyle bitflags for style_id 0–23.
+char *npp_udl_style_fg(const NppEngine *engine, const char *lang, uint32_t style_id);
+char *npp_udl_style_bg(const NppEngine *engine, const char *lang, uint32_t style_id);
+uint32_t npp_udl_style_font_style(const NppEngine *engine, const char *lang, uint32_t style_id);
 
 /// Guess language from path extension (static fallback map).
 char *npp_language_for_path(const char *path);

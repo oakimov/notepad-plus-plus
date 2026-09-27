@@ -83,6 +83,6 @@ Win32 `.dll` plugins cannot load on macOS ARM64. Recompile against
 
 ## Remaining work
 
-See `docs/port-roadmap.md` (editor chrome, Edit/Search depth, session/prefs,
-panels, plugins shell, stretch features). Still deferred: App Sandbox,
-notarized DMG, Plugin Admin, full UDL editor UI.
+See `docs/port-roadmap.md`. UDL v2.1 editor is in (Language → User-Defined
+Language…). Still deferred: App Sandbox, notarized DMG, Plugin Admin,
+ScintillaCocoa.

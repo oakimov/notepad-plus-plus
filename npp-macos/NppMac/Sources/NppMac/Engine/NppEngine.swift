@@ -96,7 +96,7 @@ final class NppEngine {
         }
     }
 
-    /// Load a Notepad++ `.udl.xml` (keyword highlighting only). Returns registered count.
+    /// Load a Notepad++ `.udl.xml` (full LexUser highlight path). Returns registered count.
     @discardableResult
     func loadUDL(path: String) throws -> Int {
         var err: UnsafeMutablePointer<CChar>?
@@ -108,6 +108,43 @@ final class NppEngine {
             throw NSError(domain: "NppEngine", code: 3, userInfo: [NSLocalizedDescriptionKey: "UDL load failed"])
         }
         return Int(n)
+    }
+
+    /// Clear all UDLs then load `path` (App Support store sync).
+    @discardableResult
+    func replaceAllUDL(path: String) throws -> Int {
+        var err: UnsafeMutablePointer<CChar>?
+        let n = path.withCString { npp_udl_replace_all(ptr, $0, &err) }
+        if let err {
+            throw NSError(domain: "NppEngine", code: 3, userInfo: [NSLocalizedDescriptionKey: Self.takeString(err)])
+        }
+        guard n >= 0 else {
+            throw NSError(domain: "NppEngine", code: 3, userInfo: [NSLocalizedDescriptionKey: "UDL replace failed"])
+        }
+        return Int(n)
+    }
+
+    func clearUDL() {
+        npp_udl_clear(ptr)
+    }
+
+    var udlCount: Int { Int(npp_udl_count(ptr)) }
+
+    /// RGB + optional bg + fontStyle bitflags for a UDL `styleId` (0–23).
+    func udlStyle(language: String, styleId: Int32) -> (fg: NSColor, bg: NSColor?, fontStyle: UInt32) {
+        let sid = UInt32(styleId)
+        let fgHex: String = language.withCString { langC in
+            Self.takeString(npp_udl_style_fg(ptr, langC, sid))
+        }
+        let bgHex: String = language.withCString { langC in
+            Self.takeString(npp_udl_style_bg(ptr, langC, sid))
+        }
+        let fontStyle: UInt32 = language.withCString { langC in
+            npp_udl_style_font_style(ptr, langC, sid)
+        }
+        let fg = Self.color(fromRGBHex: fgHex) ?? .textColor
+        let bg = Self.color(fromRGBHex: bgHex)
+        return (fg, bg, fontStyle)
     }
 
     func isDirty(at index: Int) -> Bool {

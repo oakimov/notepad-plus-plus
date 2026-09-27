@@ -146,6 +146,15 @@ final class DocumentStore {
         try engine.loadUDL(path: path)
     }
 
+    @discardableResult
+    func replaceAllUDL(path: String) throws -> Int {
+        try engine.replaceAllUDL(path: path)
+    }
+
+    func udlStyle(language: String, styleId: Int32) -> (fg: NSColor, bg: NSColor?, fontStyle: UInt32) {
+        engine.udlStyle(language: language, styleId: styleId)
+    }
+
     func language(forPath path: String) -> String {
         engine.language(forPath: path)
     }

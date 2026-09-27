@@ -6,6 +6,9 @@
 //! `langs.model.xml`, styled by `stylers.model.xml` colors.
 
 mod queries;
+mod udl;
+
+pub use udl::{highlight_udl, udl_fold_ranges, UdlToken};
 
 use std::collections::{BTreeMap, BTreeSet};
 

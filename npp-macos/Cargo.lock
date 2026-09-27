@@ -188,6 +188,7 @@ dependencies = [
 name = "npp-highlight"
 version = "0.1.0"
 dependencies = [
+ "npp-config",
  "streaming-iterator",
  "tree-sitter",
  "tree-sitter-css",

@@ -16,11 +16,12 @@ use std::ptr;
 
 use npp_core::{Buffer, DocumentManager, LineEnding};
 use npp_fs::Encoding;
+use npp_config::UdlLang;
 use npp_highlight::{
     bgr_to_rgb, build_extension_map, default_scope_rgb, display_name, grammar_key,
     groups_from_keywords, highlight_keyword_lang, highlight_keywords, highlight_special,
-    highlight_tree_sitter, is_menu_language, language_for_extension, language_for_extension_map,
-    merge_tokens, scope_from_style_name, Scope, Token,
+    highlight_tree_sitter, highlight_udl, is_menu_language, language_for_extension,
+    language_for_extension_map, merge_tokens, scope_from_style_name, Scope, Token,
 };
 
 /// Per-document UI metadata (path, title, encoding, language).
@@ -57,6 +58,8 @@ pub struct Engine {
     global_colors: BTreeMap<Scope, String>,
     /// UDL key → display name.
     udl_display: BTreeMap<String, String>,
+    /// Full UDL v2.1 definitions for LexUser-equivalent highlighting.
+    udl_langs: BTreeMap<String, UdlLang>,
     /// Optional editor canvas colors from the active theme (`RRGGBB`).
     editor_fg: Option<String>,
     editor_bg: Option<String>,
@@ -75,6 +78,7 @@ impl Engine {
             style_colors: BTreeMap::new(),
             global_colors: BTreeMap::new(),
             udl_display: BTreeMap::new(),
+            udl_langs: BTreeMap::new(),
             editor_fg: None,
             editor_bg: None,
         };
@@ -147,15 +151,28 @@ impl Engine {
         }
     }
 
-    /// Register UDL keyword languages (load-only). Returns registered keys.
-    fn register_udl(&mut self, defs: &[npp_config::UdlDef]) -> Vec<String> {
+    /// Remove all registered UDL languages (keys, menus, highlight tables, extensions).
+    fn clear_udls(&mut self) {
+        let keys: Vec<String> = self.udl_langs.keys().cloned().collect();
+        for key in &keys {
+            self.lang_hl.remove(key);
+            self.udl_display.remove(key);
+            self.lang_names.retain(|n| n != key);
+            self.ext_map.retain(|_, v| v != key);
+        }
+        self.udl_langs.clear();
+    }
+
+    /// Register full UDL v2.1 languages (LexUser highlight path). Returns registered keys.
+    fn register_udl(&mut self, defs: &[UdlLang]) -> Vec<String> {
         let mut keys = Vec::new();
         for u in defs {
-            let groups = groups_from_keywords(&u.keywords);
+            // Keep legacy keyword tables as a soft fallback if highlight_udl returns empty.
+            let groups = groups_from_keywords(&u.highlight_keywords());
             self.lang_hl.insert(
                 u.key.clone(),
                 LangHighlight {
-                    comment_line: u.comment_line.clone(),
+                    comment_line: u.comment_line(),
                     comment_start: String::new(),
                     comment_end: String::new(),
                     groups,
@@ -172,6 +189,7 @@ impl Engine {
                 self.lang_names.push(u.key.clone());
             }
             self.udl_display.insert(u.key.clone(), u.name.clone());
+            self.udl_langs.insert(u.key.clone(), u.clone());
             keys.push(u.key.clone());
         }
         self.lang_names.sort_by(|a, b| {
@@ -916,7 +934,15 @@ pub unsafe extern "C" fn npp_lang_display_name_for(lang: *const c_char) -> *mut 
     to_cstring(display_name(lang))
 }
 
-/// Load a `.udl.xml` file into the engine (keyword highlighting only).
+/// Clear all registered UDL languages from the engine.
+#[no_mangle]
+pub unsafe extern "C" fn npp_udl_clear(engine: *mut Engine) {
+    if let Some(eng) = eng_mut(engine) {
+        eng.clear_udls();
+    }
+}
+
+/// Load a `.udl.xml` / multi-lang `userDefineLang.xml` into the engine (full LexUser path).
 /// Returns number of UserLang entries registered, or -1 on error (optional err_out).
 #[no_mangle]
 pub unsafe extern "C" fn npp_udl_load(
@@ -946,6 +972,125 @@ pub unsafe extern "C" fn npp_udl_load(
             -1
         }
     }
+}
+
+/// Clear then load `path` (App Support store sync). Returns count or -1.
+#[no_mangle]
+pub unsafe extern "C" fn npp_udl_replace_all(
+    engine: *mut Engine,
+    path: *const c_char,
+    err_out: *mut *mut c_char,
+) -> i32 {
+    if !err_out.is_null() {
+        *err_out = ptr::null_mut();
+    }
+    let Some(eng) = eng_mut(engine) else {
+        return -1;
+    };
+    let Some(path) = cstr_to_str(path) else {
+        return -1;
+    };
+    match npp_config::parse_udl(Path::new(path)) {
+        Ok(defs) => {
+            eng.clear_udls();
+            let n = defs.len() as i32;
+            eng.register_udl(&defs);
+            n
+        }
+        Err(e) => {
+            if !err_out.is_null() {
+                *err_out = to_cstring(&e);
+            }
+            -1
+        }
+    }
+}
+
+fn udl_style<'a>(eng: &'a Engine, lang: &str, style_id: u32) -> Option<&'a npp_config::UdlStyle> {
+    let key = eng.resolve_lang(lang);
+    let udl = eng.udl_langs.get(&key).or_else(|| eng.udl_langs.get(lang))?;
+    udl.styles
+        .iter()
+        .find(|s| u32::from(s.style_id) == style_id)
+        .or_else(|| udl.styles.iter().find(|s| s.style_id == 0))
+}
+
+/// RGB hex (`RRGGBB`) foreground for UDL `style_id` (0–23). Caller frees.
+#[no_mangle]
+pub unsafe extern "C" fn npp_udl_style_fg(
+    engine: *const Engine,
+    lang: *const c_char,
+    style_id: u32,
+) -> *mut c_char {
+    let Some(eng) = eng_ref(engine) else {
+        return to_cstring("000000");
+    };
+    let lang = cstr_to_str(lang).unwrap_or("");
+    if let Some(s) = udl_style(eng, lang, style_id) {
+        let fg = s.fg_color.trim();
+        if fg.len() == 6 {
+            return to_cstring(fg);
+        }
+    }
+    to_cstring(eng.editor_fg.as_deref().unwrap_or("000000"))
+}
+
+/// RGB hex (`RRGGBB`) background for UDL `style_id`. Caller frees; empty if unset/default.
+#[no_mangle]
+pub unsafe extern "C" fn npp_udl_style_bg(
+    engine: *const Engine,
+    lang: *const c_char,
+    style_id: u32,
+) -> *mut c_char {
+    let Some(eng) = eng_ref(engine) else {
+        return to_cstring("");
+    };
+    let lang = cstr_to_str(lang).unwrap_or("");
+    if let Some(s) = udl_style(eng, lang, style_id) {
+        let bg = s.bg_color.trim();
+        if bg.len() == 6 {
+            return to_cstring(bg);
+        }
+    }
+    to_cstring("")
+}
+
+/// Font style bitflags for UDL `style_id` (bold=1, italic=2, underline=4).
+#[no_mangle]
+pub unsafe extern "C" fn npp_udl_style_font_style(
+    engine: *const Engine,
+    lang: *const c_char,
+    style_id: u32,
+) -> u32 {
+    let Some(eng) = eng_ref(engine) else {
+        return 0;
+    };
+    let lang = cstr_to_str(lang).unwrap_or("");
+    udl_style(eng, lang, style_id)
+        .map(|s| u32::from(s.font_style))
+        .unwrap_or(0)
+}
+
+/// Number of registered UDL languages.
+#[no_mangle]
+pub unsafe extern "C" fn npp_udl_count(engine: *const Engine) -> i32 {
+    eng_ref(engine).map(|e| e.udl_langs.len() as i32).unwrap_or(0)
+}
+
+/// Engine key at UDL index (caller frees).
+#[no_mangle]
+pub unsafe extern "C" fn npp_udl_key(engine: *const Engine, index: i32) -> *mut c_char {
+    let Some(eng) = eng_ref(engine) else {
+        return ptr::null_mut();
+    };
+    if index < 0 {
+        return ptr::null_mut();
+    }
+    eng.udl_langs
+        .keys()
+        .nth(index as usize)
+        .map(|s| to_cstring(s))
+        .unwrap_or(ptr::null_mut())
 }
 
 /// RGB hex (`RRGGBB`) foreground for `scope` under `lang` (caller frees).
@@ -1079,8 +1224,45 @@ pub unsafe extern "C" fn npp_highlight(
     if text.len() > 2 * 1024 * 1024 {
         return 0;
     }
+    let eng = &*engine;
+    // UDL: return SCE_USER_STYLE_* ids in `scope` (0–23).
+    let udl_key = {
+        let resolved = eng.resolve_lang(lang);
+        if eng.udl_langs.contains_key(lang) {
+            Some(lang.to_owned())
+        } else if eng.udl_langs.contains_key(&resolved) {
+            Some(resolved)
+        } else {
+            None
+        }
+    };
+    if let Some(key) = udl_key {
+        let boxed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let udl = eng.udl_langs.get(&key).expect("udl key");
+            let toks = highlight_udl(udl, text);
+            toks.into_iter()
+                .filter(|t| t.end > t.start && t.style_id != 0)
+                .map(|t| NppTokenC {
+                    start: t.start as u32,
+                    end: t.end as u32,
+                    scope: u32::from(t.style_id),
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice()
+        })) {
+            Ok(b) => b,
+            Err(_) => return 0,
+        };
+        if boxed.is_empty() {
+            return 0;
+        }
+        let len = boxed.len() as i32;
+        *out_tokens = Box::into_raw(boxed) as *mut NppTokenC;
+        return len;
+    }
+
     let toks = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        highlight_all(&*engine, lang, text)
+        highlight_all(eng, lang, text)
     })) {
         Ok(t) => t,
         Err(_) => return 0,
@@ -1654,6 +1836,59 @@ mod tests {
                 failures.len(),
                 failures.join("\n")
             );
+        }
+    }
+
+    #[test]
+    fn udl_markdown_highlight_uses_style_ids() {
+        let md = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../PowerEditor/bin/userDefineLangs/markdown._preinstalled.udl.xml"
+        );
+        unsafe {
+            let eng = npp_engine_create();
+            assert!(!eng.is_null());
+            let path = CString::new(md).unwrap();
+            let mut err: *mut c_char = ptr::null_mut();
+            let n = npp_udl_load(eng, path.as_ptr(), &mut err);
+            assert!(n >= 1, "load markdown UDL: {:?}", cstr_to_str(err));
+            assert!(npp_udl_count(eng) >= 1);
+
+            let key_c = npp_udl_key(eng, 0);
+            assert!(!key_c.is_null());
+            let key = CStr::from_ptr(key_c).to_string_lossy().into_owned();
+            npp_string_free(key_c);
+            assert!(key.starts_with("udl_"), "key={key}");
+
+            let sample = CString::new("# Title\n\n`code` and http://x\n").unwrap();
+            let lang = CString::new(key.as_str()).unwrap();
+            let mut toks: *mut NppTokenC = ptr::null_mut();
+            let count = npp_highlight(eng, lang.as_ptr(), sample.as_ptr(), &mut toks);
+            assert!(count > 0, "expected UDL tokens");
+            // style_id 2 = LINE COMMENTS (markdown headings), 16+ = delimiters
+            let mut saw_heading = false;
+            let mut saw_delim = false;
+            for i in 0..count as usize {
+                let t = &*toks.add(i);
+                if t.scope == 2 {
+                    saw_heading = true;
+                }
+                if (16..=23).contains(&t.scope) {
+                    saw_delim = true;
+                }
+            }
+            npp_tokens_free(toks, count);
+            assert!(saw_heading, "expected COMMENTLINE style for heading");
+            assert!(saw_delim, "expected delimiter style for backticks");
+
+            let fg = npp_udl_style_fg(eng, lang.as_ptr(), 2);
+            let fg_s = CStr::from_ptr(fg).to_string_lossy().into_owned();
+            npp_string_free(fg);
+            assert_eq!(fg_s.len(), 6, "fg hex");
+
+            npp_udl_clear(eng);
+            assert_eq!(npp_udl_count(eng), 0);
+            npp_engine_destroy(eng);
         }
     }
 

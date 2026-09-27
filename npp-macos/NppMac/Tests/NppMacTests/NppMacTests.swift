@@ -101,4 +101,50 @@ final class DocumentStoreTests: XCTestCase {
         XCTAssertEqual(tabs.last?.title, "x")
         XCTAssertFalse(tabs.isEmpty)
     }
+
+    func testUDLMarkdownRoundTrip() throws {
+        // …/npp-macos/NppMac/Tests/NppMacTests/NppMacTests.swift → repo root (notepad-plus-plus)
+        let md = URL(fileURLWithPath: #file)
+            .deletingLastPathComponent() // NppMacTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // NppMac
+            .deletingLastPathComponent() // npp-macos
+            .deletingLastPathComponent() // notepad-plus-plus
+            .appendingPathComponent("PowerEditor/bin/userDefineLangs/markdown._preinstalled.udl.xml")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: md.path), "markdown UDL fixture missing at \(md.path)")
+
+        let langs = try UDLXML.parse(contentsOf: md)
+        XCTAssertEqual(langs.count, 1)
+        let lang = try XCTUnwrap(langs.first)
+        XCTAssertEqual(lang.name, "Markdown (preinstalled)")
+        XCTAssertEqual(lang.ext, "md markdown")
+        XCTAssertEqual(lang.udlVersion, "2.1")
+        XCTAssertTrue(lang.caseIgnored)
+        XCTAssertTrue(lang.prefix[0])
+        XCTAssertFalse(lang.prefix[7])
+        XCTAssertTrue(lang.keyword("Comments").contains("00#"))
+        XCTAssertEqual(lang.commentFields[0], "#")
+        XCTAssertEqual(lang.commentFields[2], "((EOL))")
+        XCTAssertEqual(lang.commentFields[3], "<!--")
+        XCTAssertEqual(lang.commentFields[4], "-->")
+        XCTAssertFalse(lang.keyword("Operators1").isEmpty)
+        XCTAssertEqual(lang.delimiterFields[0][0], "![ [")
+        let d4 = try XCTUnwrap(lang.styles.first(where: { $0.name == "DELIMITERS4" }))
+        XCTAssertEqual(d4.nesting, 65600)
+
+        let xml = UDLXML.serializeSingle(lang)
+        let again = try UDLXML.parse(data: Data(xml.utf8))
+        XCTAssertEqual(again.count, 1)
+        let rt = try XCTUnwrap(again.first)
+        XCTAssertEqual(rt.name, lang.name)
+        XCTAssertEqual(rt.ext, lang.ext)
+        XCTAssertEqual(rt.keyword("Comments"), lang.keyword("Comments"))
+        XCTAssertEqual(rt.keyword("Delimiters"), lang.keyword("Delimiters"))
+        XCTAssertEqual(rt.keyword("Keywords1"), lang.keyword("Keywords1"))
+        XCTAssertEqual(rt.prefix, lang.prefix)
+        XCTAssertEqual(
+            rt.styles.first(where: { $0.name == "DELIMITERS4" })?.nesting,
+            65600
+        )
+    }
 }

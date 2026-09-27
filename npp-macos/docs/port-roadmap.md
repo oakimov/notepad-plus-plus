@@ -27,7 +27,7 @@ Document Map, Clipboard History, session/recent/config.xml, …)
 
 ## Done — Phase 7: Print, UDL, themes, column, nativeLang, shortcuts, multi-caret
 
-- Print, UDL load-only, Document Map, Clipboard, Character Panel
+- Print, Document Map, Clipboard, Character Panel
 - Themes + Appearance + Show Whitespace
 - Edit → Column Mode (Option-drag rectangular selection; multi-insert)
 - Multi-caret (Cmd-click add/remove; type/delete/paste/arrows; Esc clears)
@@ -35,7 +35,17 @@ Document Map, Clipboard History, session/recent/config.xml, …)
 - Settings → Shortcut Mapper (persist to AppPrefs / `config.xml`)
 - Project panels: covered by View → Folder as Workspace
 
+## Done — UDL v2.1 full editor
+
+- `npp-config` full `UdlLang` parse/write (28 keyword lists, 24 styles, Settings)
+- LexUser-equivalent highlighter (`npp-highlight/udl.rs`, SCE_USER_STYLE_* 0–23)
+- FFI: `npp_udl_load` / `replace_all` / `clear` / style fg·bg·fontStyle; paint in `applyHighlight`
+- Language → **User-Defined Language…** (4 tabs + styler nesting sheet)
+- Persist `~/Library/Application Support/NppMac/userDefineLang.xml` (+ `userDefineLangs/`)
+- Auto-load store at launch; Import/Export / Load UDL… / User-defined submenu
+
 ## Out of scope (by design)
 
-- Plugin Admin / full UDL editor / ScintillaCocoa
+- Plugin Admin / ScintillaCocoa
 - Dockable plugin panels (M5) / full Win32 `NPPM_*` surface
+- Exact LexUser nesting matrix / fold ranges (stub) / multi-doc line-state continuity
